@@ -1,299 +1,273 @@
-﻿import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
+﻿import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/ocr_service.dart';
 
 void main() {
-  runApp(const MyApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const ScreenshotOcrApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ScreenshotOcrApp extends StatelessWidget {
+  const ScreenshotOcrApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Instant Screenshot OCR',
       theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.light,
+        ),
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
-      home: const MyHomePage(),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      home: const HomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  static const _channel = MethodChannel('screenshot_channel');
-
-  bool _autoCopyToClipboard = true;
-  bool _isScanning = false;
-  String? _activeAlert;
-  String? _latestScreenshotPath;
-  final List<_ScanEntry> _history = <_ScanEntry>[];
-  late final OcrService _ocrService;
+class _HomePageState extends State<HomePage> {
+  final OcrService _ocrService = OcrService();
+  List<Map<String, dynamic>> _ocrHistoryList = [];
+  bool _autoCopyEnabled = true;
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
-    _ocrService = OcrService(onCopyCompleted: _showCopyCompletion);
-    _channel.setMethodCallHandler(_handleScreenshotMethod);
-    Future<void>.microtask(() => _ocrService.handleScreenshotPath(null));
-  }
+    _loadLocalHistory();
+    
+    // Initialize our native platform communications channel
+    _ocrService.initialize();
 
-  Future<void> _handleScreenshotMethod(MethodCall call) async {
-    if (call.method == 'onScreenshotTaken') {
-      final path = call.arguments?.toString();
-      if (path != null && path.isNotEmpty) {
-        setState(() {
-          _latestScreenshotPath = path;
-          _activeAlert = 'Screenshot captured: $path';
-          _history.insert(0, _ScanEntry(snippet: path, source: 'System screenshot'));
-        });
-        await _ocrService.handleScreenshotPath(path);
-      }
-    }
-  }
-
-  void _showCopyCompletion(String message) {
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _activeAlert = message;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  void _handleBackgroundClipboardMatch(String match) {
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      _activeAlert = 'Clipboard match detected: $match';
-      _history.insert(0, _ScanEntry(snippet: match, source: 'Background match'));
-    });
-  }
-
-  Future<void> _runStitchPreview() async {
-    setState(() => _isScanning = true);
-
-    final viewports = <String>[
-      'Viewport 1 • top section',
-      'Viewport 2 • mid section',
-      'Viewport 3 • footer',
-    ];
-
-    for (final viewport in viewports) {
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      if (!mounted) {
-        return;
-      }
+    // Hook up background completion logic triggers
+    _ocrService.onOcrComplete = (String extractedText) {
       setState(() {
-        _history.insert(0, _ScanEntry(snippet: viewport, source: 'Stitch preview'));
+        _isProcessing = false;
       });
-    }
+      if (_autoCopyEnabled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("✨ Text extracted & copied to clipboard!"),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        _loadLocalHistory(); // Refresh the list UI instantly
+      }
+    };
 
-    await _ocrService.runBackgroundClipboardMatch();
+    // Hook up error notification alerts
+    _ocrService.onOcrError = (String errorMsg) {
+      setState(() {
+        _isProcessing = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("❌ $errorMsg"),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    };
+  }
 
-    if (!mounted) {
-      return;
+  Future<void> _loadLocalHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+    setState(() {
+      _ocrHistoryList = rawHistory
+          .map((item) => jsonDecode(item) as Map<String, dynamic>)
+          .toList();
+    });
+  }
+
+  Future<void> _clearHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('ocr_history');
+    setState(() {
+      _ocrHistoryList.clear();
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("History cleared.")),
+      );
     }
-    setState(() => _isScanning = false);
+  }
+
+  @override
+  void dispose() {
+    _ocrService.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Instant Screenshot OCR'),
-        centerTitle: false,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        toolbarHeight: 84,
+        centerTitle: true,
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          if (_ocrHistoryList.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete_sweep),
+              tooltip: 'Clear All History',
+              onPressed: _clearHistory,
+            ),
+        ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          child: ListView(
-            children: [
-              Text(
-                'Capture, review, and keep OCR results in sync.',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+      body: Column(
+        children: [
+          // Loading Status Indicator
+          if (_isProcessing)
+            const LinearProgressIndicator(),
+
+          // System Control Panel
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Card(
+              elevation: 2,
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: const Text('Auto-copy to Clipboard'),
+                    subtitle: const Text('Instantly inject extracted text into phone buffer'),
+                    value: _autoCopyEnabled,
+                    onChanged: (bool value) {
+                      setState(() {
+                        _autoCopyEnabled = value;
+                      });
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 250),
-                child: _activeAlert == null
-                    ? const SizedBox.shrink(key: ValueKey('empty'))
-                    : Container(
-                        key: ValueKey(_activeAlert),
-                        margin: const EdgeInsets.only(bottom: 16),
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.notifications_active_rounded,
-                              color: theme.colorScheme.onPrimaryContainer,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _activeAlert!,
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onPrimaryContainer,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-              ),
-              Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+
+          // Primary Navigation / Feature Launcher
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.unfold_more),
+                label: const Text('Stitch & Scroll OCR'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                 ),
-                color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.history_rounded,
-                            color: theme.colorScheme.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Recent OCR snippets',
-                            style: theme.textTheme.titleMedium,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      if (_history.isEmpty)
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Feature under development...")),
+                  );
+                },
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Dashboard List Title
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Recent Snippets (${_ocrHistoryList.length})',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // OCR History Stream View Elements
+          Expanded(
+            child: _ocrHistoryList.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.center_focus_weak,
+                          size: 64,
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                        const SizedBox(height: 16),
                         Text(
-                          'No scans captured yet',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                          'No text scanned yet',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.outline,
                           ),
-                        )
-                      else
-                        ListView.separated(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: _history.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final entry = _history[index];
-                            return Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surface,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    entry.snippet,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.bodyMedium,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    entry.source,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Take a screenshot inside any app to start!',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: _ocrHistoryList.length,
+                    itemBuilder: (context, index) {
+                      final item = _ocrHistoryList[index];
+                      final textSnippet = item['text'] ?? '';
+                      final timestampStr = item['timestamp'] ?? '';
+                      String formattedTime = '';
+                      
+                      try {
+                        final parsedDate = DateTime.parse(timestampStr);
+                        formattedTime = "${parsedDate.hour.toString().padLeft(2, '0')}:${parsedDate.minute.toString().padLeft(2, '0')}";
+                      } catch (_) {
+                        formattedTime = '';
+                      }
+
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        child: ListTile(
+                          title: Text(
+                            textSnippet,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          trailing: Text(
+                            formattedTime,
+                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                          onLongPress: () {
+                            // Secondary fallback manual copy trigger
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Snippet selected")),
                             );
                           },
                         ),
-                    ],
+                      );
+                    },
                   ),
-                ),
-              ),
-              if (_latestScreenshotPath != null) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Latest screenshot path: $_latestScreenshotPath',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSecondaryContainer,
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Auto-copy to clipboard'),
-                subtitle: const Text('Send OCR output to your clipboard when a match is found.'),
-                value: _autoCopyToClipboard,
-                onChanged: (value) {
-                  setState(() => _autoCopyToClipboard = value);
-                },
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _isScanning ? null : _runStitchPreview,
-                icon: _isScanning
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.auto_awesome_rounded),
-                label: Text(_isScanning ? 'Scanning viewports…' : 'Stitch & Scroll OCR'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-            ],
           ),
-        ),
+        ],
       ),
     );
   }
-}
-
-class _ScanEntry {
-  const _ScanEntry({required this.snippet, required this.source});
-
-  final String snippet;
-  final String source;
 }

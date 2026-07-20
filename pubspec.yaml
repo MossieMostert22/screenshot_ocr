@@ -37,6 +37,7 @@ dependencies:
   google_mlkit_text_recognition: ^0.16.0
   clipboard: ^3.0.14
   path_provider: ^2.1.6
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
