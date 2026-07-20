@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/ocr_service.dart';
+import 'services/image_stitcher.dart';
+
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,6 +45,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final OcrService _ocrService = OcrService();
+  final ImageStitcher _imageStitcher = ImageStitcher(); // Add this line
   List<Map<String, dynamic>> _ocrHistoryList = [];
   bool _autoCopyEnabled = true;
   bool _isProcessing = false;
@@ -160,7 +163,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
 
-          // Primary Navigation / Feature Launcher
+                   // Primary Navigation / Feature Launcher
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: SizedBox(
@@ -172,14 +175,49 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                 ),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Feature under development...")),
-                  );
-                },
+                onPressed: _isProcessing 
+                    ? null 
+                    : () async {
+                        setState(() {
+                          _isProcessing = true;
+                        });
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("📸 Initializing viewport stitch scan..."),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+
+                        // TODO: Replicate viewport capture array. 
+                        // For prototyping testing, we pass a dummy path checklist.
+                        List<String> mockPaths = []; 
+                        
+                        if (mockPaths.isNotEmpty) {
+                          final String? stitchedResultPath = 
+                              await _imageStitcher.stitchImagesVertically(mockPaths);
+                          
+                          if (stitchedResultPath != null) {
+                            await _ocrService.processScreenshot(stitchedResultPath);
+                          } else {
+                            _ocrService.onOcrError?.call("Stitching processing failed.");
+                          }
+                        } else {
+                          setState(() {
+                            _isProcessing = false;
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Simulating capture layout context. Ready for physical inputs!"),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
               ),
             ),
           ),
+
 
           const SizedBox(height: 16),
 
