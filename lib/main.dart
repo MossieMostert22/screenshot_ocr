@@ -58,22 +58,66 @@ class _HomePageState extends State<HomePage> {
     // Initialize our native platform communications channel
     _ocrService.initialize();
 
-    // Hook up background completion logic triggers
-    _ocrService.onOcrComplete = (String extractedText) {
+        // Hook up background completion logic triggers with auto-eraser prompt
+    _ocrService.onOcrComplete = (String extractedText, String imagePath) {
       setState(() {
         _isProcessing = false;
       });
+      
+      _loadLocalHistory(); // Refresh the log dashboard view list instantly
+
       if (_autoCopyEnabled) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("✨ Text extracted & copied to clipboard!"),
-            behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 3),
-          ),
+        // Show our clean floating notification alert panel choice
+        showDialog(
+          context: context,
+          barrierDismissible: false, // User must make a dynamic choice
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.auto_delete, color: Colors.deepPurple),
+                  SizedBox(width: 8),
+                  Text("Text Extracted!"),
+                ],
+              ),
+              content: const Text(
+                "The text has been copied to your clipboard. Do you want to erase the screenshot to prevent device gallery clutter?",
+              ),
+              actions: [
+                TextButton(
+                  child: const Text("Keep Image"),
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                  },
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                    foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                  child: const Text("Erase Screenshot"),
+                  onPressed: () async {
+                    Navigator.of(dialogContext).pop();
+                    bool success = await _ocrService.deleteScreenshotFile(imagePath);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(success 
+                              ? "🗑️ Screenshot deleted successfully!" 
+                              : "⚠️ Could not delete file (Permission restriction)."),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            );
+          },
         );
-        _loadLocalHistory(); // Refresh the list UI instantly
       }
     };
+
 
     // Hook up error notification alerts
     _ocrService.onOcrError = (String errorMsg) {
