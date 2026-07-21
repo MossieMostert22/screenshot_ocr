@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:clipboard/clipboard.dart';
@@ -96,18 +95,20 @@ class OcrService {
     }
   }
 
+   /// Securely triggers the native Android System Delete Confirmation Prompt
   Future<bool> deleteScreenshotFile(String path) async {
     try {
-      final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-        return true;
-      }
-      return false;
+      // Invoke our brand new platform channel method hook
+      final bool? success = await _channel.invokeMethod<bool>(
+        'deleteGalleryFile',
+        {'path': path},
+      );
+      return success ?? false;
     } catch (e) {
       return false;
     }
   }
+
 
   String _cleanupText(String rawText) {
     return rawText.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
