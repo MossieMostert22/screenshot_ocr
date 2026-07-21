@@ -3,7 +3,6 @@ package com.mossiemostert22.screenshot_ocr
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -11,29 +10,30 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channelName = "screenshot_channel"
 
-    private var methodChannel: MethodChannel? = null
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-        companionChannel = methodChannel
+        // Correctly initialize and assign the messenger pipeline globally
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        companionChannel = channel
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onDestroy() {
+        // Clean up memory reference contexts when the app context closes down
+        companionChannel = null
+        super.onDestroy()
     }
 
     companion object {
-        private var companionChannel: MethodChannel? = null
+        @JvmStatic
+        var companionChannel: MethodChannel? = null
 
+        @JvmStatic
         fun forwardScreenshotToFlutter(context: Context, filePath: String) {
             val channel = companionChannel
-            if (channel == null) {
-                return
-            }
-
-            Handler(Looper.getMainLooper()).post {
-                channel.invokeMethod("onScreenshotTaken", filePath)
+            if (channel != null) {
+                Handler(Looper.getMainLooper()).post {
+                    channel.invokeMethod("onScreenshotTaken", filePath)
+                }
             }
         }
     }

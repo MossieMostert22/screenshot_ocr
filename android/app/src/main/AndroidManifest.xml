@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-        <!-- Allows the application to show alerts even when minimized to the background -->
+    <!-- Allows the application to show alerts even when minimized to the background -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     
     <!-- Required to push high-visibility banner cards on Android 13, 14, 15, and 16 -->
@@ -33,11 +33,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- FIXED: Added directBootAware and explicit intent filters for modern Samsung hardware engines -->
         <receiver
             android:name=".ScreenshotReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.SCREENSHOT" />
+                <action android:name="com.samsung.android.capture.SCREENSHOT_EVENT" />
             </intent-filter>
         </receiver>
 
@@ -48,8 +52,8 @@
             android:value="2" />
     </application>
     <!-- Required to query activities that can process text, see:
-         https://developer.android.com/training/package-visibility and
-         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+         https://android.com and
+         https://android.com.
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <!-- Tells Android exactly what our application has permission to search for -->
@@ -58,7 +62,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- CRITICAL FIX: Allows your receiver to query the system MediaStore gallery application provider -->
+        <!-- Allows your receiver to query the system MediaStore gallery application provider -->
         <provider android:authorities="media" />
     </queries>
 </manifest>
