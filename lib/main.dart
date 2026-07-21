@@ -53,6 +53,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _requestAppPermissions(); // Add this line right here
     _loadLocalHistory();
     
     // Initialize our native platform communications channel
@@ -133,6 +134,19 @@ class _HomePageState extends State<HomePage> {
       );
     };
   }
+
+  Future<void> _requestAppPermissions() async {
+    // 1. Request Android 13+ Notification Tray permissions
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
+    }
+
+    // 2. Request System Overlay permission so the delete dialog can pop up over other apps
+    if (await Permission.systemAlertWindow.isDenied) {
+      await Permission.systemAlertWindow.request();
+    }
+  }
+
 
   Future<void> _loadLocalHistory() async {
     final prefs = await SharedPreferences.getInstance();
