@@ -28,17 +28,18 @@ class OcrService {
     await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
-  /// Show a standout notification using two entirely separate native channel IDs
+
+    // Show a standout notification using brand new unique channel IDs to reset Android's audio cache
   Future<void> showStandoutNotification(String snippetText, {required bool forceSilence}) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      // CRITICAL FIX: Two entirely different channel IDs so Android doesn't mix them up
-      forceSilence ? 'ocr_chan_pure_silent' : 'ocr_chan_loud_priority',
+      // FIXED: New channel IDs (_v4) to force Android to drop the old cached beep rules
+      forceSilence ? 'ocr_chan_pure_silent_v4' : 'ocr_chan_loud_priority_v4',
       forceSilence ? 'Silent Capture Mode' : 'OCR Extraction Complete',
       channelDescription: 'Manages sound separation during screenshot processing tasks',
       importance: forceSilence ? Importance.low : Importance.max,
       priority: forceSilence ? Priority.low : Priority.high,
-      playSound: !forceSilence, // No beep sounds while actively stitching slices
+      playSound: !forceSilence, // Kills the audio beep track completely for silent frames
       enableVibration: !forceSilence,
       showWhen: true,
       styleInformation: const BigTextStyleInformation(''),
@@ -50,13 +51,14 @@ class OcrService {
     String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
 
     await _notificationsPlugin.show(
-      // CRITICAL FIX: Distinct notification IDs prevents them from overwriting each other
-      id: forceSilence ? 99 : 100,
-      title: forceSilence ? '📸 Frame Stitched to Background Canvas' : '🔍 [T] SCROLL TEXT EXTRACTED!',
+      // FIXED: Unique notification identifiers prevent tray duplicates
+      id: forceSilence ? 199 : 200,
+      title: forceSilence ? '📸 Stitch Frame Buffered' : '🔍 [T] SCROLL TEXT EXTRACTED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
   }
+
 
   Future<void> _handleMethodCall(MethodCall call) async {
     if (call.method == "onScreenshotTaken") {
