@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'services/ocr_service.dart';
 import 'services/image_stitcher.dart';
 
@@ -58,6 +59,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _requestAppPermissions();
+    _initForegroundTask();
     _loadLocalHistory();
 
     _ocrService.initialize();
@@ -88,8 +90,7 @@ class _HomePageState extends State<HomePage> {
         _isProcessing = false;
         _stitchingStatusText = "";
       });
-      _ocrService.isStitchingModeActive =
-          false; // Reset security flag layout context
+      _ocrService.isStitchingModeActive = false;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("❌ $errorMsg"),
@@ -108,6 +109,25 @@ class _HomePageState extends State<HomePage> {
       await Permission.systemAlertWindow.request();
     }
   }
+
+    void _initForegroundTask() {
+    // FIXED: Simplified parameters to align with the newly released package rules
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'foreground_service_channel',
+        channelName: 'Foreground Service Notification',
+        channelDescription: 'Keeps background capture loops active during stitching tasks.',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.nothing(),
+        allowWakeLock: true,
+      ),
+    );
+  }
+
 
   Future<void> _loadLocalHistory() async {
     final prefs = await SharedPreferences.getInstance();
@@ -159,14 +179,21 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _executeStitchAndScrollOcr() async {
+    if (!mounted) return;
     setState(() {
       _isProcessing = true;
       _stitchingStatusText =
           "📸 Listening for multi-capture scroll sequence...";
     });
 
-    // ACTIVATE SILENCE ENGINE: Tell our OCR background system to silence all upcoming beeps
     _ocrService.isStitchingModeActive = true;
+
+    // Securely launch the un-killable background priority execution service container
+    await FlutterForegroundTask.startService(
+      notificationTitle: 'Screenshot OCR Active',
+      notificationText:
+          'Monitoring scrolling viewports in silent capture mode...',
+    );
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -177,8 +204,7 @@ class _HomePageState extends State<HomePage> {
     );
 
     List<String> capturedViewports = [];
-    int expectedCapturesCount =
-        3; // You can change this number later to match your test targets
+    int expectedCapturesCount = 3;
 
     final oldCallback = _ocrService.onOcrComplete;
 
@@ -207,10 +233,13 @@ class _HomePageState extends State<HomePage> {
     final String? stitchedMegaImagePath = await _imageStitcher
         .stitchImagesVertically(paths);
 
-    // TURN ALERTS BACK ON: The collection loop is done, so we prepare to play the final completion sound
     _ocrService.isStitchingModeActive = false;
 
+    // Stop the foreground service since our background loop is complete
+    await FlutterForegroundTask.stopService();
+
     if (stitchedMegaImagePath != null) {
+      if (!mounted) return;
       setState(() {
         _stitchingStatusText =
             "🔎 Extracting combined paragraph text blocks...";
@@ -347,11 +376,13 @@ class _HomePageState extends State<HomePage> {
                           final timestampStr = item['timestamp'] ?? '';
                           final savedImagePath = item['image_path'] ?? '';
                           String formattedTime = '';
+
                           try {
                             final parsedDate = DateTime.parse(timestampStr);
                             formattedTime =
                                 "${parsedDate.hour.toString().padLeft(2, '0')}:${parsedDate.minute.toString().padLeft(2, '0')}";
                           } catch (_) {}
+
                           return Card(
                             margin: const EdgeInsets.symmetric(vertical: 6),
                             child: ListTile(
