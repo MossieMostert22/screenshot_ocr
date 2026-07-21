@@ -13,7 +13,7 @@ class OcrService {
   Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
-  // SMART FLAG: Allows the main interface to dynamically silence individual slice captures
+  // SMART STATE TOGGLE: The UI turns this ON/OFF to control sound behavior dynamically
   bool isStitchingModeActive = false;
 
   void initialize() async {
@@ -29,15 +29,16 @@ class OcrService {
     await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
+  /// Show a standout notification without spamming system beep alerts
   Future<void> showStandoutNotification(String snippetText, {required bool forceSilence}) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      forceSilence ? 'screenshot_ocr_silent_channel_v2' : 'screenshot_ocr_alert_channel_v2',
+      forceSilence ? 'screenshot_ocr_silent_channel_v3' : 'screenshot_ocr_alert_channel_v3',
       forceSilence ? 'Silent Snippet Processing' : 'Screenshot OCR Completion Alerts',
       channelDescription: 'Manages sound pollution loops during multi-page capture sequences',
       importance: forceSilence ? Importance.low : Importance.max,
       priority: forceSilence ? Priority.low : Priority.high,
-      playSound: !forceSilence, // CRITICAL FIX: Explicitly kills the audio beep track
+      playSound: !forceSilence, // CRITICAL FIX: Explicitly turns off the audio beep track
       enableVibration: !forceSilence,
       showWhen: true,
       styleInformation: const BigTextStyleInformation(''),
