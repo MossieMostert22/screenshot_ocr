@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/ocr_service.dart';
 import 'services/image_stitcher.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 
 
 void main() {
