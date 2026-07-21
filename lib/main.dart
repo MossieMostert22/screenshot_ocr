@@ -110,8 +110,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-    void _initForegroundTask() {
-    // FIXED: Simplified parameters to align with the newly released package rules
+       void _initForegroundTask() {
+    // FIXED: Removed the unsupported notificationMode property and const keywords for version 10+
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'foreground_service_channel',
@@ -127,6 +127,8 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+
 
 
   Future<void> _loadLocalHistory() async {
