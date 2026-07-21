@@ -1,13 +1,16 @@
 package com.mossiemostert22.screenshot_ocr
 
+import android.Manifest
 import android.app.Activity
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -20,8 +23,15 @@ class MainActivity : FlutterActivity() {
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
-    // NATIVE SOUND CONTROL GUARD FLAG
-    private var nativeIsStitching = false
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // FIXED: Requests runtime service permission execution authority directly on launch for Android 14+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            if (checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE), 1002)
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -29,23 +39,16 @@ class MainActivity : FlutterActivity() {
         companionChannel = channel
 
         channel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "deleteGalleryFile" -> {
-                    val filePath = call.argument<String>("path")
-                    if (filePath != null) {
-                        deleteResultCallback = result
-                        executeSecureDelete(filePath)
-                    } else {
-                        result.success(false)
-                    }
+            if (call.method == "deleteGalleryFile") {
+                val filePath = call.argument<String>("path")
+                if (filePath != null) {
+                    deleteResultCallback = result
+                    executeSecureDelete(filePath)
+                } else {
+                    result.success(false)
                 }
-                "setNativeStitchMode" -> {
-                    // Instantly toggles our native silence tracking shield flag
-                    val active = call.argument<Boolean>("active") ?: false
-                    nativeIsStitching = active
-                    result.success(true)
-                }
-                else -> result.notImplemented()
+            } else {
+                result.notImplemented()
             }
         }
 
@@ -59,10 +62,9 @@ class MainActivity : FlutterActivity() {
                 Handler(Looper.getMainLooper()).postDelayed({
                     val filePath = getLatestScreenshotPath(applicationContext)
                     if (filePath != null) {
-                        // Pass our nativeIsStitching flag state straight through to the bridge service
-                        forwardScreenshotWithState(applicationContext, filePath, nativeIsStitching)
+                        forwardScreenshotToFlutter(applicationContext, filePath)
                     }
-                }, 600)
+                }, 800)
             }
         }
 
@@ -74,7 +76,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getLatestScreenshotPath(context: Context): String? {
-        val projection = arrayOf(MediaStore.Images.Media.DATA)
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATA)
         val cursor: Cursor? = context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
@@ -123,7 +125,14 @@ class MainActivity : FlutterActivity() {
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
-                startIntentSenderForResult(pendingIntent.intentSender, 1001, null, 0, 0, 0)
+                startIntentSenderForResult(
+                    pendingIntent.intentSender, 
+                    1001, 
+                    null, 
+                    0, 
+                    0, 
+                    0
+                )
             } else {
                 val deleted = context.contentResolver.delete(uri, null, null)
                 deleteResultCallback?.success(deleted > 0)
@@ -136,12 +145,18 @@ class MainActivity : FlutterActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 1001) {
-            deleteResultCallback?.success(resultCode == Activity.RESULT_OK)
+            if (resultCode == Activity.RESULT_OK) {
+                deleteResultCallback?.success(true)
+            } else {
+                deleteResultCallback?.success(false)
+            }
         }
     }
 
     override fun onDestroy() {
-        screenshotObserver?.let { contentResolver.unregisterContentObserver(it) }
+        screenshotObserver?.let {
+            contentResolver.unregisterContentObserver(it)
+        }
         companionChannel = null
         super.onDestroy()
     }
@@ -151,13 +166,11 @@ class MainActivity : FlutterActivity() {
         var companionChannel: MethodChannel? = null
 
         @JvmStatic
-        fun forwardScreenshotWithState(context: Context, filePath: String, isStitching: Boolean) {
+        fun forwardScreenshotToFlutter(context: Context, filePath: String) {
             val channel = companionChannel
             if (channel != null) {
                 Handler(Looper.getMainLooper()).post {
-                    // Send an organized map bundle tracking both raw path and active silence state properties
-                    val argumentsMap = mapOf("path" to filePath, "isStitchSlice" to isStitching)
-                    channel.invokeMethod("onScreenshotTakenWithState", argumentsMap)
+                    channel.invokeMethod("onScreenshotTaken", filePath)
                 }
             }
         }
