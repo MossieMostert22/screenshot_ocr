@@ -18,44 +18,40 @@ class OcrService {
     await _initNotifications();
   }
 
-        Future<void> _initNotifications() async {
+  Future<void> _initNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
     
-    // FIXED: Explicitly assigning the initialized configurations variable to the requested 'settings' parameter key
+    // FIXED: Correctly assigned to the required 'settings' named parameter matching recent packages
     await _notificationsPlugin.initialize(
       settings: initializationSettings,
     );
   }
 
-
-
-
-
-  /// Show a standout bold notification card on top of other system assets
-  Future<void> showStandoutNotification(String snippetText) async {
-    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+  Future<void> showStandoutNotification(String snippetText, {bool isSilent = false}) async {
+    final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'screenshot_ocr_channel_id',
-      'Screenshot OCR Alerts',
-      channelDescription: 'High visibility alerts for text extraction',
-      importance: Importance.max,
-      priority: Priority.high,
+      isSilent ? 'screenshot_ocr_silent_channel' : 'screenshot_ocr_alert_channel',
+      isSilent ? 'Silent Processing Alerts' : 'Screenshot OCR Alerts',
+      channelDescription: 'Handles background file acquisition text parsing',
+      importance: isSilent ? Importance.low : Importance.max,
+      priority: isSilent ? Priority.low : Priority.high,
+      playSound: !isSilent,
+      enableVibration: !isSilent,
       showWhen: true,
-      ticker: 'ticker',
-      styleInformation: BigTextStyleInformation(''), // Allows viewing long strings
+      styleInformation: const BigTextStyleInformation(''),
     );
-    const NotificationDetails platformChannelSpecifics =
+    
+    final NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
     
     String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
 
-    // FIX: Switched from positional arguments to explicit named parameters required by the new package version
     await _notificationsPlugin.show(
-      id: 0,
-      title: '🔍 [T] TEXT EXTRACTED & COPIED!',
+      id: isSilent ? 1 : 0,
+      title: isSilent ? '📸 Frame Added to Scroll Canvas' : '🔍 [T] TEXT EXTRACTED & COPIED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
@@ -70,7 +66,7 @@ class OcrService {
     }
   }
 
-  Future<void> processScreenshot(String path) async {
+  Future<void> processScreenshot(String path, {bool isStitchSlice = false}) async {
     try {
       final inputImage = InputImage.fromFilePath(path);
       final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
@@ -82,10 +78,12 @@ class OcrService {
         return;
       }
 
-      await FlutterClipboard.copy(cleanText);
-      await _saveToHistory(cleanText);
+      if (!isStitchSlice) {
+        await FlutterClipboard.copy(cleanText);
+        await _saveToHistory(cleanText, path);
+      }
       
-      await showStandoutNotification(cleanText);
+      await showStandoutNotification(cleanText, isSilent: isStitchSlice);
 
       if (onOcrComplete != null) {
         onOcrComplete!(cleanText, path);
@@ -95,10 +93,8 @@ class OcrService {
     }
   }
 
-   /// Securely triggers the native Android System Delete Confirmation Prompt
   Future<bool> deleteScreenshotFile(String path) async {
     try {
-      // Invoke our brand new platform channel method hook
       final bool? success = await _channel.invokeMethod<bool>(
         'deleteGalleryFile',
         {'path': path},
@@ -109,18 +105,18 @@ class OcrService {
     }
   }
 
-
   String _cleanupText(String rawText) {
     return rawText.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
-  Future<void> _saveToHistory(String text) async {
+  Future<void> _saveToHistory(String text, String imagePath) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> history = prefs.getStringList('ocr_history') ?? [];
     
     history.insert(0, jsonEncode({
       'text': text,
       'timestamp': DateTime.now().toIso8601String(),
+      'image_path': imagePath,
     }));
     
     if (history.length > 50) history = history.sublist(0, 50);

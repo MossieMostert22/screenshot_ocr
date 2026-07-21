@@ -63,6 +63,7 @@ class _HomePageState extends State<HomePage> {
     _ocrService.initialize();
 
     _ocrService.onOcrComplete = (String extractedText, String imagePath) {
+      if (!mounted) return;
       setState(() {
         _isProcessing = false;
         _stitchingStatusText = "";
@@ -71,65 +72,18 @@ class _HomePageState extends State<HomePage> {
       _loadLocalHistory();
 
       if (_autoCopyEnabled) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (BuildContext dialogContext) {
-            return AlertDialog(
-              title: const Row(
-                children: [
-                  Icon(Icons.auto_delete, color: Colors.deepPurple),
-                  SizedBox(width: 8),
-                  Text("Text Extracted!"),
-                ],
-              ),
-              content: const Text(
-                "The text has been copied to your clipboard. Do you want to erase the screenshot to prevent device gallery clutter?",
-              ),
-              actions: [
-                TextButton(
-                  child: const Text("Keep Image"),
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop();
-                  },
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.errorContainer,
-                    foregroundColor: Theme.of(
-                      context,
-                    ).colorScheme.onErrorContainer,
-                  ),
-                  child: const Text("Erase Screenshot"),
-                  onPressed: () async {
-                    Navigator.of(dialogContext).pop();
-                    bool success = await _ocrService.deleteScreenshotFile(
-                      imagePath,
-                    );
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            success
-                                ? "🗑️ Screenshot deleted successfully!"
-                                : "⚠️ Could not delete file (Permission restriction).",
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    }
-                  },
-                ),
-              ],
-            );
-          },
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("✨ Text extracted & copied to clipboard!"),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 2),
+          ),
         );
       }
     };
 
     _ocrService.onOcrError = (String errorMsg) {
+      if (!mounted) return;
       setState(() {
         _isProcessing = false;
         _stitchingStatusText = "";
@@ -156,6 +110,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadLocalHistory() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+    if (!mounted) return;
     setState(() {
       _ocrHistoryList = rawHistory
           .map((item) => jsonDecode(item) as Map<String, dynamic>)
@@ -166,13 +121,38 @@ class _HomePageState extends State<HomePage> {
   Future<void> _clearHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('ocr_history');
+    if (!mounted) return;
     setState(() {
       _ocrHistoryList.clear();
     });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text("History cleared.")));
+  }
+
+  Future<void> _inlineDeleteEntry(int index, String imagePath) async {
+    bool fileDeleted = await _ocrService.deleteScreenshotFile(imagePath);
+
+    final prefs = await SharedPreferences.getInstance();
+    List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+
+    if (index < rawHistory.length) {
+      rawHistory.removeAt(index);
+      await prefs.setStringList('ocr_history', rawHistory);
+      await _loadLocalHistory();
+    }
+
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("History cleared.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            fileDeleted
+                ? "🗑️ Log entry and screenshot file erased completely!"
+                : "Log snippet entry removed from application dashboard views.",
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -180,14 +160,14 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _isProcessing = true;
       _stitchingStatusText =
-          "📸 Waiting for scroll viewport capture sequence...";
+          "📸 Listening for multi-capture scroll sequence...";
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("Take successive snapshots of scroll sections now!"),
+        content: Text("Start snapping successive views! (Target: 3 frames)"),
         behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 4),
+        duration: Duration(seconds: 3),
       ),
     );
 
@@ -199,9 +179,10 @@ class _HomePageState extends State<HomePage> {
     _ocrService.onOcrComplete = (String extractedText, String imagePath) {
       capturedViewports.add(imagePath);
 
+      if (!mounted) return;
       setState(() {
         _stitchingStatusText =
-            "Captured vertical frame (${capturedViewports.length}/$expectedCapturesCount)";
+            "Captured frame block (${capturedViewports.length}/$expectedCapturesCount)";
       });
 
       if (capturedViewports.length >= expectedCapturesCount) {
@@ -212,8 +193,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _processStitchedCompilationPipeline(List<String> paths) async {
+    if (!mounted) return;
     setState(() {
-      _stitchingStatusText = "🧩 Stitching pixel fragments vertically...";
+      _stitchingStatusText = "🧩 Blending pixel borders vertically...";
     });
 
     final String? stitchedMegaImagePath = await _imageStitcher
@@ -222,12 +204,12 @@ class _HomePageState extends State<HomePage> {
     if (stitchedMegaImagePath != null) {
       setState(() {
         _stitchingStatusText =
-            "🔎 Parsing merged image canvas via offline OCR...";
+            "🔎 Extracting combined paragraph text blocks...";
       });
       await _ocrService.processScreenshot(stitchedMegaImagePath);
     } else {
       _ocrService.onOcrError?.call(
-        "Vertical image stitching failed matrix parsing.",
+        "Vertical image matrix layout compilation collapsed.",
       );
     }
   }
@@ -258,9 +240,6 @@ class _HomePageState extends State<HomePage> {
         children: [
           Column(
             children: [
-              if (_isProcessing && _stitchingStatusText.isEmpty)
-                const LinearProgressIndicator(),
-
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Card(
@@ -357,6 +336,7 @@ class _HomePageState extends State<HomePage> {
                           final item = _ocrHistoryList[index];
                           final textSnippet = item['text'] ?? '';
                           final timestampStr = item['timestamp'] ?? '';
+                          final savedImagePath = item['image_path'] ?? '';
                           String formattedTime = '';
                           try {
                             final parsedDate = DateTime.parse(timestampStr);
@@ -372,15 +352,27 @@ class _HomePageState extends State<HomePage> {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 14),
                               ),
-                              trailing: Text(
+                              subtitle: Text(
                                 formattedTime,
                                 style: const TextStyle(
                                   fontSize: 11,
                                   color: Colors.grey,
                                 ),
                               ),
+                              trailing: IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: Colors.redAccent,
+                                ),
+                                tooltip: 'Erase Log & Screenshot File',
+                                onPressed: () =>
+                                    _inlineDeleteEntry(index, savedImagePath),
+                              ),
                               onLongPress: () {
-                                FlutterClipboard.copy(textSnippet).then((_) {
+                                FlutterClipboard.copy(textSnippet).then((
+                                  dynamic _,
+                                ) {
+                                  if (!context.mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
                                       content: Text("✨ Copied to clipboard!"),
@@ -397,7 +389,8 @@ class _HomePageState extends State<HomePage> {
           ),
           if (_isProcessing && _stitchingStatusText.isNotEmpty)
             Container(
-              color: Colors.black.withOpacity(0.75),
+              // FIXED: Upgraded with modern SDK .withValues optimization rule
+              color: Colors.black.withValues(alpha: 0.75),
               child: Center(
                 child: Card(
                   margin: const EdgeInsets.all(32),
