@@ -74,7 +74,7 @@ class _HomePageState extends State<HomePage> {
       if (_autoCopyEnabled) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("✨ Text extracted & copied to clipboard!"),
+            content: Text("✨ Long text extracted & copied to clipboard!"),
             behavior: SnackBarBehavior.floating,
             duration: Duration(seconds: 2),
           ),
@@ -88,6 +88,8 @@ class _HomePageState extends State<HomePage> {
         _isProcessing = false;
         _stitchingStatusText = "";
       });
+      _ocrService.isStitchingModeActive =
+          false; // Reset security flag layout context
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("❌ $errorMsg"),
@@ -163,6 +165,9 @@ class _HomePageState extends State<HomePage> {
           "📸 Listening for multi-capture scroll sequence...";
     });
 
+    // ACTIVATE SILENCE ENGINE: Tell our OCR background system to silence all upcoming beeps
+    _ocrService.isStitchingModeActive = true;
+
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text("Start snapping successive views! (Target: 3 frames)"),
@@ -172,7 +177,8 @@ class _HomePageState extends State<HomePage> {
     );
 
     List<String> capturedViewports = [];
-    int expectedCapturesCount = 3;
+    int expectedCapturesCount =
+        3; // You can change this number later to match your test targets
 
     final oldCallback = _ocrService.onOcrComplete;
 
@@ -200,6 +206,9 @@ class _HomePageState extends State<HomePage> {
 
     final String? stitchedMegaImagePath = await _imageStitcher
         .stitchImagesVertically(paths);
+
+    // TURN ALERTS BACK ON: The collection loop is done, so we prepare to play the final completion sound
+    _ocrService.isStitchingModeActive = false;
 
     if (stitchedMegaImagePath != null) {
       setState(() {
@@ -389,7 +398,6 @@ class _HomePageState extends State<HomePage> {
           ),
           if (_isProcessing && _stitchingStatusText.isNotEmpty)
             Container(
-              // FIXED: Upgraded with modern SDK .withValues optimization rule
               color: Colors.black.withValues(alpha: 0.75),
               child: Center(
                 child: Card(

@@ -13,6 +13,9 @@ class OcrService {
   Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
+  // SMART FLAG: Allows the main interface to dynamically silence individual slice captures
+  bool isStitchingModeActive = false;
+
   void initialize() async {
     _channel.setMethodCallHandler(_handleMethodCall);
     await _initNotifications();
@@ -23,23 +26,19 @@ class OcrService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
-    
-    // FIXED: Correctly assigned to the required 'settings' named parameter matching recent packages
-    await _notificationsPlugin.initialize(
-      settings: initializationSettings,
-    );
+    await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
-  Future<void> showStandoutNotification(String snippetText, {bool isSilent = false}) async {
+  Future<void> showStandoutNotification(String snippetText, {required bool forceSilence}) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      isSilent ? 'screenshot_ocr_silent_channel' : 'screenshot_ocr_alert_channel',
-      isSilent ? 'Silent Processing Alerts' : 'Screenshot OCR Alerts',
-      channelDescription: 'Handles background file acquisition text parsing',
-      importance: isSilent ? Importance.low : Importance.max,
-      priority: isSilent ? Priority.low : Priority.high,
-      playSound: !isSilent,
-      enableVibration: !isSilent,
+      forceSilence ? 'screenshot_ocr_silent_channel_v2' : 'screenshot_ocr_alert_channel_v2',
+      forceSilence ? 'Silent Snippet Processing' : 'Screenshot OCR Completion Alerts',
+      channelDescription: 'Manages sound pollution loops during multi-page capture sequences',
+      importance: forceSilence ? Importance.low : Importance.max,
+      priority: forceSilence ? Priority.low : Priority.high,
+      playSound: !forceSilence, // CRITICAL FIX: Explicitly kills the audio beep track
+      enableVibration: !forceSilence,
       showWhen: true,
       styleInformation: const BigTextStyleInformation(''),
     );
@@ -50,8 +49,8 @@ class OcrService {
     String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
 
     await _notificationsPlugin.show(
-      id: isSilent ? 1 : 0,
-      title: isSilent ? '📸 Frame Added to Scroll Canvas' : '🔍 [T] TEXT EXTRACTED & COPIED!',
+      id: forceSilence ? 1 : 0,
+      title: forceSilence ? '📸 Stitch Frame Buffered' : '🔍 [T] SCROLL TEXT EXTRACTED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
@@ -66,7 +65,7 @@ class OcrService {
     }
   }
 
-  Future<void> processScreenshot(String path, {bool isStitchSlice = false}) async {
+  Future<void> processScreenshot(String path) async {
     try {
       final inputImage = InputImage.fromFilePath(path);
       final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
@@ -78,12 +77,14 @@ class OcrService {
         return;
       }
 
-      if (!isStitchSlice) {
+      // If we are actively stitching, do not clutter local logs or clipboard buffers with raw slices
+      if (!isStitchingModeActive) {
         await FlutterClipboard.copy(cleanText);
         await _saveToHistory(cleanText, path);
       }
       
-      await showStandoutNotification(cleanText, isSilent: isStitchSlice);
+      // Pass the active state flag down to enforce pure silence or priority audio
+      await showStandoutNotification(cleanText, forceSilence: isStitchingModeActive);
 
       if (onOcrComplete != null) {
         onOcrComplete!(cleanText, path);
