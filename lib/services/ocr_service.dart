@@ -4,16 +4,59 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:clipboard/clipboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class OcrService {
   static const MethodChannel _channel = MethodChannel('screenshot_channel');
   final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   
-  Function(String, String)? onOcrComplete; // Now returns text AND original path
+  Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
-  void initialize() {
+  void initialize() async {
     _channel.setMethodCallHandler(_handleMethodCall);
+    await _initNotifications();
+  }
+
+    Future<void> _initNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    
+    // FIXED: Changed from a positional argument to the required named parameter
+    await _notificationsPlugin.initialize(
+      initializationSettings: initializationSettings,
+    );
+  }
+
+
+  /// Show a standout bold notification card on top of other system assets
+  Future<void> showStandoutNotification(String snippetText) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'screenshot_ocr_channel_id',
+      'Screenshot OCR Alerts',
+      channelDescription: 'High visibility alerts for text extraction',
+      importance: Importance.max,
+      priority: Priority.high,
+      showWhen: true,
+      ticker: 'ticker',
+      styleInformation: BigTextStyleInformation(''), // Allows viewing long strings
+    );
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+    
+    String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
+
+    // FIX: Switched from positional arguments to explicit named parameters required by the new package version
+    await _notificationsPlugin.show(
+      id: 0,
+      title: '🔍 [T] TEXT EXTRACTED & COPIED!',
+      body: displaySnippet,
+      notificationDetails: platformChannelSpecifics,
+    );
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -39,16 +82,17 @@ class OcrService {
 
       await FlutterClipboard.copy(cleanText);
       await _saveToHistory(cleanText);
+      
+      await showStandoutNotification(cleanText);
 
       if (onOcrComplete != null) {
-        onOcrComplete!(cleanText, path); // Pass path out to the UI layer
+        onOcrComplete!(cleanText, path);
       }
     } catch (e) {
       if (onOcrError != null) onOcrError!("OCR Processing Failed: ${e.toString()}");
     }
   }
 
-  /// New Method: Permanently deletes the screenshot file to keep storage clean
   Future<bool> deleteScreenshotFile(String path) async {
     try {
       final file = File(path);
