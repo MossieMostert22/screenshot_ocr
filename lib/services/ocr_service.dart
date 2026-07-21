@@ -13,7 +13,6 @@ class OcrService {
   Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
-  // SMART STATE TOGGLE: The UI turns this ON/OFF to control sound behavior dynamically
   bool isStitchingModeActive = false;
 
   void initialize() async {
@@ -29,16 +28,17 @@ class OcrService {
     await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
-  /// Show a standout notification without spamming system beep alerts
+  /// Show a standout notification using two entirely separate native channel IDs
   Future<void> showStandoutNotification(String snippetText, {required bool forceSilence}) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      forceSilence ? 'screenshot_ocr_silent_channel_v3' : 'screenshot_ocr_alert_channel_v3',
-      forceSilence ? 'Silent Snippet Processing' : 'Screenshot OCR Completion Alerts',
-      channelDescription: 'Manages sound pollution loops during multi-page capture sequences',
+      // CRITICAL FIX: Two entirely different channel IDs so Android doesn't mix them up
+      forceSilence ? 'ocr_chan_pure_silent' : 'ocr_chan_loud_priority',
+      forceSilence ? 'Silent Capture Mode' : 'OCR Extraction Complete',
+      channelDescription: 'Manages sound separation during screenshot processing tasks',
       importance: forceSilence ? Importance.low : Importance.max,
       priority: forceSilence ? Priority.low : Priority.high,
-      playSound: !forceSilence, // CRITICAL FIX: Explicitly turns off the audio beep track
+      playSound: !forceSilence, // No beep sounds while actively stitching slices
       enableVibration: !forceSilence,
       showWhen: true,
       styleInformation: const BigTextStyleInformation(''),
@@ -50,8 +50,9 @@ class OcrService {
     String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
 
     await _notificationsPlugin.show(
-      id: forceSilence ? 1 : 0,
-      title: forceSilence ? '📸 Stitch Frame Buffered' : '🔍 [T] SCROLL TEXT EXTRACTED!',
+      // CRITICAL FIX: Distinct notification IDs prevents them from overwriting each other
+      id: forceSilence ? 99 : 100,
+      title: forceSilence ? '📸 Frame Stitched to Background Canvas' : '🔍 [T] SCROLL TEXT EXTRACTED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
@@ -78,13 +79,11 @@ class OcrService {
         return;
       }
 
-      // If we are actively stitching, do not clutter local logs or clipboard buffers with raw slices
       if (!isStitchingModeActive) {
         await FlutterClipboard.copy(cleanText);
         await _saveToHistory(cleanText, path);
       }
       
-      // Pass the active state flag down to enforce pure silence or priority audio
       await showStandoutNotification(cleanText, forceSilence: isStitchingModeActive);
 
       if (onOcrComplete != null) {
