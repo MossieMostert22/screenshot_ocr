@@ -19,17 +19,20 @@ class OcrService {
     await _initNotifications();
   }
 
-    Future<void> _initNotifications() async {
+        Future<void> _initNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
     
-    // FIXED: Changed from a positional argument to the required named parameter
+    // FIXED: Explicitly assigning the initialized configurations variable to the requested 'settings' parameter key
     await _notificationsPlugin.initialize(
-      initializationSettings: initializationSettings,
+      settings: initializationSettings,
     );
   }
+
+
+
 
 
   /// Show a standout bold notification card on top of other system assets
