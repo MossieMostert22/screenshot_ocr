@@ -106,16 +106,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ].request();
   }
 
-  void _initForegroundTaskSystem() async {
+    void _initForegroundTaskSystem() async {
+    // FIXED: Split configuration settings into local variables to remove hidden compile-time const flags completely
+    final notificationOpts = AndroidNotificationOptions(
+      channelId: 'ocr_service_survival_channel',
+      channelName: 'Background Service Survival Monitor',
+      channelDescription: 'Maintains media observers awake when the application UI layer is closed.',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+    );
+
     FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'ocr_service_survival_channel',
-        channelName: 'Background Service Survival Monitor',
-        channelDescription:
-            'Maintains media observers awake when the application UI layer is closed.',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-      ),
+      androidNotificationOptions: notificationOpts,
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: const ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.nothing(),
@@ -126,11 +128,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.startService(
         notificationTitle: 'Screenshot OCR Tracking Active',
-        notificationText:
-            'App inbox background tracking is awake and protected.',
+        notificationText: 'App inbox background tracking is awake and protected.',
       );
     }
   }
+
 
   Future<void> _loadLocalAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
