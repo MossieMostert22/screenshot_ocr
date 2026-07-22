@@ -37,7 +37,7 @@ class ScreenshotOcrApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: WithForegroundTask(child: HomePage()),
+      home: const WithForegroundTask(child: HomePage()),
     );
   }
 }
@@ -59,10 +59,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _requestAppPermissions();
-    _initForegroundTaskSystem();
-    _loadLocalAppSettings();
-    _loadLocalHistory();
+    _initializeApplicationSequence();
+  }
+
+  /// FIXED: Enforces strict synchronous awaits across all launch sequences to eliminate race conditions
+  Future<void> _initializeApplicationSequence() async {
+    await _requestAppPermissions();
+    await _initForegroundTaskSystem();
+    await _loadLocalAppSettings();
+    await _loadLocalHistory();
     _ocrService.initialize();
 
     _ocrService.onOcrComplete = (String extractedText, String imagePath) {
@@ -99,19 +104,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _requestAppPermissions() async {
-    await [
+    Map<Permission, PermissionStatus> statuses = await [
       Permission.notification,
       Permission.systemAlertWindow,
       Permission.manageExternalStorage,
     ].request();
+
+    if (statuses[Permission.notification]?.isDenied ?? false) {
+      await Permission.notification.request();
+    }
   }
 
-    void _initForegroundTaskSystem() async {
-    // FIXED: Split configuration settings into local variables to remove hidden compile-time const flags completely
+  Future<void> _initForegroundTaskSystem() async {
     final notificationOpts = AndroidNotificationOptions(
       channelId: 'ocr_service_survival_channel',
       channelName: 'Background Service Survival Monitor',
-      channelDescription: 'Maintains media observers awake when the application UI layer is closed.',
+      channelDescription:
+          'Maintains media observers awake when the application UI layer is closed.',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
     );
@@ -119,7 +128,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     FlutterForegroundTask.init(
       androidNotificationOptions: notificationOpts,
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: ForegroundTaskOptions(
+      foregroundTaskOptions: const ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.nothing(),
         allowWakeLock: true,
       ),
@@ -128,11 +137,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!await FlutterForegroundTask.isRunningService) {
       await FlutterForegroundTask.startService(
         notificationTitle: 'Screenshot OCR Tracking Active',
-        notificationText: 'App inbox background tracking is awake and protected.',
+        notificationText:
+            'App inbox background tracking is awake and protected.',
       );
     }
   }
-
 
   Future<void> _loadLocalAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -153,6 +162,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
+  /// FIXED: Generates an infinite-scrolling formal PDF Document flow to handle long files perfectly
   Future<void> _exportTextToLocalPdfFile(String textContent) async {
     final TextEditingController fileNameController = TextEditingController();
 
@@ -190,11 +200,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     if (chosenName != null && chosenName.isNotEmpty) {
       try {
-        final Directory? baseDir = await getExternalStorageDirectory();
-        if (baseDir == null) {
-          throw Exception("Storage path identification broken.");
-        }
-
         String targetPath = "/storage/emulated/0/Documents";
         final Directory targetFolder = Directory(targetPath);
         if (!await targetFolder.exists()) {
@@ -204,32 +209,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final File pdfOutputFile = File('$targetPath/$chosenName.pdf');
         final pdf = pw.Document();
 
+        // FIXED: Re-implemented the native PDF layout structure using an infinite MultiPage controller flow
         pdf.addPage(
-          pw.Page(
+          pw.MultiPage(
+            pageFormat: PdfPageFormat.a4,
+            margin: const pw.EdgeInsets.all(32),
             build: (pw.Context context) {
-              return pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    "Extracted Task Document",
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
+              return [
+                pw.Text(
+                  "Extracted Task Document",
+                  style: pw.TextStyle(
+                    fontSize: 24,
+                    fontWeight: pw.FontWeight.bold,
                   ),
-                  pw.SizedBox(height: 8),
-                  pw.Text(
-                    "Saved via Instant Screenshot OCR",
-                    style: pw.TextStyle(
-                      fontSize: 10,
-                      color: PdfColor.fromHex('#757575'),
-                    ),
+                ),
+                pw.SizedBox(height: 8),
+                pw.Text(
+                  "Saved via Instant Screenshot OCR",
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    color: PdfColor.fromHex('#757575'),
                   ),
-                  pw.Divider(),
-                  pw.SizedBox(height: 12),
-                  pw.Text(textContent, style: const pw.TextStyle(fontSize: 13)),
-                ],
-              );
+                ),
+                pw.Divider(),
+                pw.SizedBox(height: 12),
+                pw.Paragraph(
+                  text: textContent,
+                  style: pw.TextStyle(fontSize: 12, lineHeight: 1.4),
+                ),
+                // FUTURE EXPANSION SLOT: pw.Image placeholder fits cleanly right here for upcoming updates!
+              ];
             },
           ),
         );
@@ -324,15 +333,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  @override
-  void dispose() {
+  @overridevoid
+  dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ocrService.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
+  @overrideWidget
+  build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Instant Screenshot OCR'),
