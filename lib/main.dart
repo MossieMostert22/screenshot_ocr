@@ -119,7 +119,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     FlutterForegroundTask.init(
       androidNotificationOptions: notificationOpts,
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: const ForegroundTaskOptions(
+      foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.nothing(),
         allowWakeLock: true,
       ),
