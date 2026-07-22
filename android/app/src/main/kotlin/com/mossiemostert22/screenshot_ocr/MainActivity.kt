@@ -23,8 +23,7 @@ class MainActivity : FlutterActivity() {
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
-    // COOLDOWN TRACKING: Prevents Samsung database event duplication spamming
-    private var lastProcessedPath: String? = null
+    // HARD TIME LOCK: Implements a global clock barrier to defeat Samsung's duplicate events
     private var lastProcessedTime: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,24 +62,23 @@ class MainActivity : FlutterActivity() {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
                 
-                // Allow the operating system to completely finish writing the file to disk space
+                val currentTime = System.currentTimeMillis()
+                
+                // CRITICAL FIX: If ANY media event arrives within 2.5 seconds of the last run, destroy it immediately
+                if ((currentTime - lastProcessedTime) < 2500) {
+                    return
+                }
+
+                // Lock the clock time slot instantly before doing any disk scanning
+                lastProcessedTime = currentTime
+
+                // Allow Samsung a brief fraction of a second to finish generating the physical file matrix
                 Handler(Looper.getMainLooper()).postDelayed({
                     val filePath = getLatestScreenshotPath(applicationContext)
                     if (filePath != null) {
-                        val currentTime = System.currentTimeMillis()
-                        
-                        // FIXED: Reject duplicate image paths if they try to trigger within a 2-second safety window block
-                        if (filePath == lastProcessedPath && (currentTime - lastProcessedTime) < 2000) {
-                            return@postDelayed
-                        }
-
-                        // Lock down the current values parameters to filter oncoming duplicate signals
-                        lastProcessedPath = filePath
-                        lastProcessedTime = currentTime
-
                         forwardScreenshotToFlutter(applicationContext, filePath)
                     }
-                }, 750)
+                }, 600)
             }
         }
 
