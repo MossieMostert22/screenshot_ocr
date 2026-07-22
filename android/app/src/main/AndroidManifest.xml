@@ -6,9 +6,11 @@
     <!-- Required to keep background observer alive on Android 14, 15, and 16 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    
     <!-- Required to push high-visibility banner cards on Android 13, 14, 15, and 16 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Allows the background engine to temporarily request CPU processing power when minimized -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
 
     <application
         android:label="screenshot_ocr"

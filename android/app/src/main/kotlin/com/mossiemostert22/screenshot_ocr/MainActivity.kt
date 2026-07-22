@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -23,7 +24,6 @@ class MainActivity : FlutterActivity() {
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
-    // HARD TIME LOCK: Implements a global clock barrier to defeat Samsung's duplicate events
     private var lastProcessedTime: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,16 +63,21 @@ class MainActivity : FlutterActivity() {
                 super.onChange(selfChange, uri)
                 
                 val currentTime = System.currentTimeMillis()
-                
-                // CRITICAL FIX: If ANY media event arrives within 2.5 seconds of the last run, destroy it immediately
                 if ((currentTime - lastProcessedTime) < 2500) {
                     return
                 }
-
-                // Lock the clock time slot instantly before doing any disk scanning
                 lastProcessedTime = currentTime
 
-                // Allow Samsung a brief fraction of a second to finish generating the physical file matrix
+                // FIXED: Acquire a hardware CPU WakeLock to prevent Samsung from freezing our Flutter Dart engine thread
+                val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "ScreenshotOCR::BackgroundProcessingWakeLock"
+                )
+                
+                // Keep the CPU wide awake for exactly 3.5 seconds to finish background OCR processing safely
+                wakeLock.acquire(3500)
+
                 Handler(Looper.getMainLooper()).postDelayed({
                     val filePath = getLatestScreenshotPath(applicationContext)
                     if (filePath != null) {
