@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://android.com">
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- Allows the application to show alerts even when minimized to the background -->
@@ -6,18 +6,19 @@
     <!-- Required to keep background observer alive on Android 14, 15, and 16 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- FIXED: Added missing master permission to allow seamless PDF exports on Android 11+ -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    
     <!-- Required to push high-visibility banner cards on Android 13, 14, 15, and 16 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Allows the background engine to temporarily request CPU processing power when minimized -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
 
     <application
         android:label="screenshot_ocr"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         
-        <!-- FIXED: Switched launchMode to singleInstance to preserve viewport data states during background tracking -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -27,25 +28,19 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. -->
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
-            
-            <!-- FIXED: Created a completely separate, independent tag to disable Impeller rendering cleanly -->
             <meta-data
                 android:name="io.flutter.embedding.android.EnableImpeller"
                 android:value="false" />
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
 
-        <!-- FIXED: Added mandatory metadata description block so modern Android approves our un-killable background priority status -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="specialUse"
@@ -55,20 +50,16 @@
                 android:value="This app keeps storage media listeners awake to parse multi-page scroll screenshot file matrices offline." />
         </service>
 
-        <!-- Don't delete the meta-data below.
-             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
 
-    <!-- Tells Android exactly what our application has permission to search for -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- Allows your receiver to query the system MediaStore gallery application provider -->
         <provider android:authorities="media" />
     </queries>
 </manifest>

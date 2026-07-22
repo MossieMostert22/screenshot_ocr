@@ -18,13 +18,15 @@ import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val channelName = "screenshot_channel"
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
-    private var lastProcessedTime: Long = 0
+    // TARGETED ID BARRIER: Tracks specific media database row IDs instead of clock times
+    private val processedMediaIds = HashSet<Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,55 +63,62 @@ class MainActivity : FlutterActivity() {
         screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
-                
-                val currentTime = System.currentTimeMillis()
-                if ((currentTime - lastProcessedTime) < 6000) {
-                    return
-                }
-                lastProcessedTime = currentTime
+                if (uri == null) return
 
-                // FIXED: Acquire a hardware CPU WakeLock to prevent Samsung from freezing our Flutter Dart engine thread
-                val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-                val wakeLock = powerManager.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    "ScreenshotOCR::BackgroundProcessingWakeLock"
-                )
-                
-                // Keep the CPU wide awake for exactly 3.5 seconds to finish background OCR processing safely
-                wakeLock.acquire(3500)
+                try {
+                    // Extract unique database entry row ID numbers from incoming notification payloads
+                    val currentId = ContentUris.parseId(uri)
+                    
+                    // FIXED: Instantly drop duplicate signals if this exact image asset ID has been handled
+                    if (processedMediaIds.contains(currentId)) return
+                    processedMediaIds.add(currentId)
 
-                Handler(Looper.getMainLooper()).postDelayed({
-                    val filePath = getLatestScreenshotPath(applicationContext)
-                    if (filePath != null) {
-                        forwardScreenshotToFlutter(applicationContext, filePath)
+                    // Enforce cache cleanup bounds
+                    if (processedMediaIds.size > 100) {
+                        processedMediaIds.clear()
                     }
-                }, 600)
+
+                    val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                    val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ScreenshotOCR::WakeLock")
+                    wakeLock.acquire(4000)
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        // FIXED: Scan recent files using non-deprecated metadata rules
+                        val filePath = verifyAndGetRecentScreenshotPath(applicationContext, currentId)
+                        if (filePath != null) {
+                            forwardScreenshotToFlutter(applicationContext, filePath)
+                        }
+                    }, 800)
+                } catch (_: Exception) {}
             }
         }
 
-        contentResolver.registerContentObserver(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            true,
-            screenshotObserver!!
-        )
+        contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver!!)
     }
 
-    private fun getLatestScreenshotPath(context: Context): String? {
-        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATA)
+    private fun verifyAndGetRecentScreenshotPath(context: Context, targetId: Long): String? {
+        // FIXED: Replaced deprecated DATA column references with current DISPLAY_NAME asset parameters
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
+        
         val cursor: Cursor? = context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
-            null,
-            null,
-            "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+            "${MediaStore.Images.Media._ID} = ?",
+            arrayOf(targetId.toString()),
+            null
         )
 
         cursor?.use {
             if (it.moveToFirst()) {
-                val dataIndex = it.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
-                val path = it.getString(dataIndex)
-                if (path.contains("Screenshot", ignoreCase = true)) {
-                    return path
+                val nameIndex = it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val pathIndex = it.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
+                val fileName = it.getString(nameIndex)
+                val relPath = it.getString(pathIndex)
+
+                // Match against screenshots directories cleanly without scoped tracking errors
+                if (fileName.contains("Screenshot", ignoreCase = true) || relPath.contains("Screenshot", ignoreCase = true)) {
+                    val rootDir = context.getExternalFilesDir(null)?.parentFile?.parentFile?.parentFile?.parentFile
+                    return File(rootDir, "$relPath$fileName").absolutePath
                 }
             }
         }
@@ -119,12 +128,14 @@ class MainActivity : FlutterActivity() {
     private fun executeSecureDelete(filePath: String) {
         try {
             val context = applicationContext
+            val file = File(filePath)
             val projection = arrayOf(MediaStore.Images.Media._ID)
+            
             val cursor = context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection,
-                "${MediaStore.Images.Media.DATA} = ?",
-                arrayOf(filePath),
+                "${MediaStore.Images.Media.DISPLAY_NAME} = ?",
+                arrayOf(file.name),
                 null
             )
 
@@ -141,17 +152,9 @@ class MainActivity : FlutterActivity() {
             }
 
             val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
-            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
-                startIntentSenderForResult(
-                    pendingIntent.intentSender, 
-                    1001, 
-                    null, 
-                    0, 
-                    0, 
-                    0
-                )
+                startIntentSenderForResult(pendingIntent.intentSender, 1001, null, 0, 0, 0)
             } else {
                 val deleted = context.contentResolver.delete(uri, null, null)
                 deleteResultCallback?.success(deleted > 0)
@@ -173,24 +176,16 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        screenshotObserver?.let {
-            contentResolver.unregisterContentObserver(it)
-        }
+        screenshotObserver?.let { contentResolver.unregisterContentObserver(it) }
         companionChannel = null
         super.onDestroy()
     }
 
     companion object {
-        @JvmStatic
-        var companionChannel: MethodChannel? = null
-
-        @JvmStatic
-        fun forwardScreenshotToFlutter(context: Context, filePath: String) {
-            val channel = companionChannel
-            if (channel != null) {
-                Handler(Looper.getMainLooper()).post {
-                    channel.invokeMethod("onScreenshotTaken", filePath)
-                }
+        @JvmStatic var companionChannel: MethodChannel? = null
+        @JvmStatic fun forwardScreenshotToFlutter(context: Context, filePath: String) {
+            companionChannel?.let { channel ->
+                Handler(Looper.getMainLooper()).post { channel.invokeMethod("onScreenshotTaken", filePath) }
             }
         }
     }
