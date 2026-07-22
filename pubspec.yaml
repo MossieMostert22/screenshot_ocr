@@ -36,7 +36,7 @@ dependencies:
   path_provider: ^2.1.0
   flutter_foreground_task: ^10.0.0
   google_mlkit_text_recognition: ^0.11.0
-  flutter_local_notifications: ^16.0.0
+  flutter_local_notifications: 16.1.0
   pdf: ^3.10.2
 
 
@@ -93,5 +93,3 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
-dependency_overrides:
-  xml: ^7.0.1

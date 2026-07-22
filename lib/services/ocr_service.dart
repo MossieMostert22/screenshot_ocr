@@ -26,25 +26,20 @@ class OcrService {
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
     
-    await _notificationsPlugin.initialize(
-      settings: initializationSettings,
-    );
+    await _notificationsPlugin.initialize(initializationSettings);
   }
 
-  /// Keeps the visual tray notifications icon sitting on your top bar tray safely until swiped or cleared out
   Future<void> showSingleTaskNotification(String snippetText, bool isSoundActive) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      // FIXED: Uses distinct channel registry profiles to force Android to display the status bar icon visuals
-      isSoundActive ? 'ocr_sound_tray_chan_v8' : 'ocr_silent_tray_chan_v8',
+      isSoundActive ? 'ocr_sound_tray_chan_v9' : 'ocr_silent_tray_chan_v9',
       isSoundActive ? 'Audible Task Tray Notifications' : 'Silent Task Tray Notifications',
       channelDescription: 'Fires text extraction indicators to status trays securely',
-      importance: Importance.max, // FIXED: High priority ensures the icon stays stuck on top of the screen
+      importance: Importance.max, 
       priority: Priority.high,
       playSound: isSoundActive, 
       enableVibration: isSoundActive,
       showWhen: true,
-      ongoing: false, // Allows users to swipe it away manually whenever they choose
       styleInformation: const BigTextStyleInformation(''),
     );
     
@@ -54,15 +49,15 @@ class OcrService {
     String displaySnippet = snippetText.length > 45 ? '${snippetText.substring(0, 45)}...' : snippetText;
 
     await _notificationsPlugin.show(
-      id: _taskNotificationId, 
-      title: '📩 NEW TEXT EXTRACTED!',
-      body: displaySnippet,
-      notificationDetails: platformChannelSpecifics,
+      _taskNotificationId, 
+      '📩 NEW TEXT EXTRACTED!',
+      displaySnippet,
+      platformChannelSpecifics,
     );
   }
 
   Future<void> clearActiveNotificationTray() async {
-    await _notificationsPlugin.cancel(id: _taskNotificationId);
+    await _notificationsPlugin.cancel(_taskNotificationId);
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -91,7 +86,6 @@ class OcrService {
       List<String> history = prefs.getStringList('ocr_history') ?? [];
       List<String> itemsToRemove = [];
 
-      // FIXED: Global Text Matrix Contraction Filter Engine iterating across all local task inbox profiles
       for (String itemStr in history) {
         try {
           Map<String, dynamic> existingEntry = jsonDecode(itemStr);
@@ -99,19 +93,16 @@ class OcrService {
           String oldImagePath = existingEntry['image_path'] ?? '';
 
           if (existingText.isNotEmpty) {
-            // If the old text segment matches or overlaps our new text block, queue the old card for full deletion
-            if (cleanText.contains(existingText) || existingText.contains(cleanText) || 
-                (cleanText.length > 15 && existingText.contains(cleanText.substring(0, 15)))) {
+            if (cleanText.length > existingText.length && cleanText.contains(existingText.substring(0, existingText.length > 30 ? 30 : existingText.length))) {
               itemsToRemove.add(itemStr);
               if (oldImagePath.isNotEmpty && oldImagePath != path) {
-                await deleteScreenshotFile(oldImagePath); // Delete incomplete screenshot files from gallery storage
+                await deleteScreenshotFile(oldImagePath);
               }
             }
           }
         } catch (_) {}
       }
 
-      // Drop all incomplete matched artifacts instantly out of our history logs list stack
       history.removeWhere((element) => itemsToRemove.contains(element));
 
       await FlutterClipboard.copy(cleanText);

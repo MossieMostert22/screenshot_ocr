@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
-import 'package:path_provider/path_provider.dart';
+//import 'package:path_provider/path_provider.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_foreground_task/ui/with_foreground_task.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'services/ocr_service.dart';
@@ -37,7 +38,7 @@ class ScreenshotOcrApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const WithForegroundTask(child: HomePage()),
+      home: WithForegroundTask(child: const HomePage()),
     );
   }
 }
@@ -62,10 +63,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _initializeApplicationSequence();
   }
 
-  /// FIXED: Enforces strict synchronous awaits across all launch sequences to eliminate race conditions
   Future<void> _initializeApplicationSequence() async {
     await _requestAppPermissions();
-    await _initForegroundTaskSystem();
+     _initForegroundTaskSystem();
     await _loadLocalAppSettings();
     await _loadLocalHistory();
     _ocrService.initialize();
@@ -115,7 +115,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _initForegroundTaskSystem() async {
+  void _initForegroundTaskSystem() async {
     final notificationOpts = AndroidNotificationOptions(
       channelId: 'ocr_service_survival_channel',
       channelName: 'Background Service Survival Monitor',
@@ -125,13 +125,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       priority: NotificationPriority.LOW,
     );
 
+    // FIXED: Split out into standard runtime initialization parameters to remove hidden compile-time constants
+    final taskOptions = ForegroundTaskOptions(
+      eventAction: ForegroundTaskEventAction.nothing(),
+      allowWakeLock: true,
+    );
+
     FlutterForegroundTask.init(
       androidNotificationOptions: notificationOpts,
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.nothing(),
-        allowWakeLock: true,
-      ),
+      foregroundTaskOptions: taskOptions,
     );
 
     if (!await FlutterForegroundTask.isRunningService) {
@@ -162,7 +165,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
-  /// FIXED: Generates an infinite-scrolling formal PDF Document flow to handle long files perfectly
   Future<void> _exportTextToLocalPdfFile(String textContent) async {
     final TextEditingController fileNameController = TextEditingController();
 
@@ -209,7 +211,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final File pdfOutputFile = File('$targetPath/$chosenName.pdf');
         final pdf = pw.Document();
 
-        // FIXED: Re-implemented the native PDF layout structure using an infinite MultiPage controller flow
         pdf.addPage(
           pw.MultiPage(
             pageFormat: PdfPageFormat.a4,
@@ -235,9 +236,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 pw.SizedBox(height: 12),
                 pw.Paragraph(
                   text: textContent,
-                  style: pw.TextStyle(fontSize: 12, lineHeight: 1.4),
+                  style: pw.TextStyle(fontSize: 12, lineSpacing: 1.4),
                 ),
-                // FUTURE EXPANSION SLOT: pw.Image placeholder fits cleanly right here for upcoming updates!
               ];
             },
           ),
@@ -333,14 +333,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  @overridevoid
+  @override void
   dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ocrService.dispose();
     super.dispose();
   }
 
-  @overrideWidget
+  @override Widget
   build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
