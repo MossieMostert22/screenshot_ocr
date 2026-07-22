@@ -23,9 +23,12 @@ class MainActivity : FlutterActivity() {
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
+    // COOLDOWN TRACKING: Prevents Samsung database event duplication spamming
+    private var lastProcessedPath: String? = null
+    private var lastProcessedTime: Long = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // FIXED: Requests runtime service permission execution authority directly on launch for Android 14+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             if (checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE), 1002)
@@ -59,12 +62,25 @@ class MainActivity : FlutterActivity() {
         screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
+                
+                // Allow the operating system to completely finish writing the file to disk space
                 Handler(Looper.getMainLooper()).postDelayed({
                     val filePath = getLatestScreenshotPath(applicationContext)
                     if (filePath != null) {
+                        val currentTime = System.currentTimeMillis()
+                        
+                        // FIXED: Reject duplicate image paths if they try to trigger within a 2-second safety window block
+                        if (filePath == lastProcessedPath && (currentTime - lastProcessedTime) < 2000) {
+                            return@postDelayed
+                        }
+
+                        // Lock down the current values parameters to filter oncoming duplicate signals
+                        lastProcessedPath = filePath
+                        lastProcessedTime = currentTime
+
                         forwardScreenshotToFlutter(applicationContext, filePath)
                     }
-                }, 800)
+                }, 750)
             }
         }
 
