@@ -10,7 +10,6 @@ class OcrService {
   final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   
-  // Track notification IDs to support instant clearing layouts
   static const int _taskNotificationId = 5001;
 
   Function(String, String)? onOcrComplete;
@@ -32,18 +31,18 @@ class OcrService {
     );
   }
 
-  /// Fires a clean sound alert based on the user's dashboard configuration setting
+  /// Shows the notification tray icon in both modes, but completely disables sound when muted
   Future<void> showSingleTaskNotification(String snippetText, bool isSoundActive) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      // FIXED: Uses dynamic channel toggling to bypass Android's immutable channel cache bug
-      isSoundActive ? 'ocr_inbox_sound_chan_v6' : 'ocr_inbox_mute_chan_v6',
-      isSoundActive ? 'Audible Task Inbox Alerts' : 'Silent Task Inbox Alerts',
+      isSoundActive ? 'ocr_sound_channel_v7' : 'ocr_mute_channel_v7',
+      isSoundActive ? 'Audible Task Alerts' : 'Silent Task Alerts',
       channelDescription: 'Handles incoming text notifications based on dashboard settings',
-      importance: isSoundActive ? Importance.max : Importance.low,
-      priority: isSoundActive ? Priority.high : Priority.low,
-      playSound: isSoundActive, 
-      enableVibration: isSoundActive,
+      // FIXED: Kept at Max so the visual icon sits in your top bar tray safely
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: isSoundActive, // FIXED: Explicitly turns off the sound channel track
+      enableVibration: isSoundActive, // FIXED: Turns off vibration mechanics
       showWhen: true,
       styleInformation: const BigTextStyleInformation(''),
     );
@@ -53,7 +52,6 @@ class OcrService {
     
     String displaySnippet = snippetText.length > 45 ? '${snippetText.substring(0, 45)}...' : snippetText;
 
-    // FIXED: Named parameters matching latest library rules
     await _notificationsPlugin.show(
       id: _taskNotificationId, 
       title: '📩 NEW TEXT EXTRACTED!',
@@ -62,9 +60,7 @@ class OcrService {
     );
   }
 
-  /// Instantly wipes our application's notification banner from the top system tray
   Future<void> clearActiveNotificationTray() async {
-    // FIXED: Explicitly named the target cancel ID parameter
     await _notificationsPlugin.cancel(id: _taskNotificationId);
   }
 
@@ -91,8 +87,36 @@ class OcrService {
       final prefs = await SharedPreferences.getInstance();
       bool userSoundSetting = prefs.getBool('ocr_sound_enabled') ?? true;
 
+      // FIXED: Smart Text Overlap Filter Engine
+      List<String> history = prefs.getStringList('ocr_history') ?? [];
+      
+      if (history.isNotEmpty) {
+        Map<String, dynamic> lastEntry = jsonDecode(history.first);
+        String lastExtractedText = lastEntry['text'] ?? '';
+        
+        // If the old text is found inside the new longer text, erase the old temporary segment card instantly
+        if (cleanText.contains(lastExtractedText) || lastExtractedText.contains(cleanText.substring(0, lastExtractedText.length > cleanText.length ? cleanText.length : lastExtractedText.length))) {
+          // Permanently erase the old file path reference from storage to prevent gallery clutter
+          String oldImagePath = lastEntry['image_path'] ?? '';
+          if (oldImagePath.isNotEmpty && oldImagePath != path) {
+            await deleteScreenshotFile(oldImagePath);
+          }
+          history.removeAt(0); // Pop old card segment from the history stack layout
+        }
+      }
+
+      // Automatically push the newest complete paragraph block text to clip board buffer
       await FlutterClipboard.copy(cleanText);
-      await _saveToHistory(cleanText, path);
+      
+      // Update history storage list layout bounds
+      history.insert(0, jsonEncode({
+        'text': cleanText,
+        'timestamp': DateTime.now().toIso8601String(),
+        'image_path': path,
+      }));
+      
+      if (history.length > 50) history = history.sublist(0, 50);
+      await prefs.setStringList('ocr_history', history);
       
       await showSingleTaskNotification(cleanText, userSoundSetting);
 
@@ -120,22 +144,7 @@ class OcrService {
     return rawText.replaceAll('\n', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
-  Future<void> _saveToHistory(String text, String imagePath) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> history = prefs.getStringList('ocr_history') ?? [];
-    
-    history.insert(0, jsonEncode({
-      'text': text,
-      'timestamp': DateTime.now().toIso8601String(),
-      'image_path': imagePath,
-    }));
-    
-    if (history.length > 50) history = history.sublist(0, 50);
-    await prefs.setStringList('ocr_history', history);
-  }
-
   void dispose() {
     _textRecognizer.close();
   }
 }
-
