@@ -44,13 +44,11 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage>
-    with RouteAware, WidgetsBindingObserver {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final OcrService _ocrService = OcrService();
   List<Map<String, dynamic>> _ocrHistoryList = [];
   bool _autoCopyEnabled = true;
-  bool _soundAlertsEnabled =
-      true; // FIXED: New layout state variable for sound toggle hooks
+  bool _soundAlertsEnabled = true;
 
   @override
   void initState() {
@@ -63,8 +61,6 @@ class _HomePageState extends State<HomePage>
 
     _ocrService.onOcrComplete = (String extractedText, String imagePath) {
       _loadLocalHistory();
-      _ocrService
-          .clearActiveNotificationTray(); // Auto-wipe notice instantly if app is in view
       if (_autoCopyEnabled && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -91,7 +87,7 @@ class _HomePageState extends State<HomePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // FIXED: Clear out top notifications tray immediately the moment user opens/re-enters the app screen
+    // Clear out active tray notifications immediately when entering the app screen layout manually
     if (state == AppLifecycleState.resumed) {
       _ocrService.clearActiveNotificationTray();
     }
@@ -120,18 +116,21 @@ class _HomePageState extends State<HomePage>
     });
   }
 
-  /// FIXED: Displays your exact custom confirmation wording before invoking file erasure blocks
+  /// FIXED: Wrapped using an Expanded text structural container block to erase right side overflow stripes layout bugs completely
   Future<void> _triggerSecureDeleteFlow(int index, String imagePath) async {
     bool? userConfirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Row(
             children: [
               Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
               SizedBox(width: 8),
-              Text("Confirm Erasure"),
+              Expanded(
+                // FIXED: Prevents text pixel widths from spilling over off edge boundaries layout lines
+                child: Text("Confirm Erasure", overflow: TextOverflow.ellipsis),
+              ),
             ],
           ),
           content: const Text(
@@ -140,7 +139,7 @@ class _HomePageState extends State<HomePage>
           actions: [
             TextButton(
               child: const Text("No"),
-              onPressed: () => Navigator.of(context).pop(false),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -148,7 +147,7 @@ class _HomePageState extends State<HomePage>
                 foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
               ),
               child: const Text("Yes"),
-              onPressed: () => Navigator.of(context).pop(true),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
             ),
           ],
         );
@@ -156,8 +155,7 @@ class _HomePageState extends State<HomePage>
     );
 
     if (userConfirmed == true) {
-      _ocrService
-          .clearActiveNotificationTray(); // Clear layout tracking instantly
+      _ocrService.clearActiveNotificationTray();
       bool fileDeleted = await _ocrService.deleteScreenshotFile(imagePath);
 
       final prefs = await SharedPreferences.getInstance();
@@ -184,6 +182,7 @@ class _HomePageState extends State<HomePage>
     }
   }
 
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -198,7 +197,6 @@ class _HomePageState extends State<HomePage>
         title: const Text('Instant Screenshot OCR'),
         centerTitle: true,
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // FIXED: Master sweep sweep button completely removed from top header to protect device storage files layout
       ),
       body: Column(
         children: [
@@ -223,7 +221,6 @@ class _HomePageState extends State<HomePage>
                     },
                   ),
                   const Divider(height: 1, indent: 16, endIndent: 16),
-                  // FIXED: New Settings Toggle Switch allowing instant notification audio muting/unmuting rules
                   SwitchListTile(
                     title: const Text('Notification Sound Effects'),
                     subtitle: const Text(

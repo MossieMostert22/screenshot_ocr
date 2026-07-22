@@ -31,19 +31,20 @@ class OcrService {
     );
   }
 
-  /// Shows the notification tray icon in both modes, but completely disables sound when muted
+  /// Keeps the visual tray notifications icon sitting on your top bar tray safely until swiped or cleared out
   Future<void> showSingleTaskNotification(String snippetText, bool isSoundActive) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      isSoundActive ? 'ocr_sound_channel_v7' : 'ocr_mute_channel_v7',
-      isSoundActive ? 'Audible Task Alerts' : 'Silent Task Alerts',
-      channelDescription: 'Handles incoming text notifications based on dashboard settings',
-      // FIXED: Kept at Max so the visual icon sits in your top bar tray safely
-      importance: Importance.max,
+      // FIXED: Uses distinct channel registry profiles to force Android to display the status bar icon visuals
+      isSoundActive ? 'ocr_sound_tray_chan_v8' : 'ocr_silent_tray_chan_v8',
+      isSoundActive ? 'Audible Task Tray Notifications' : 'Silent Task Tray Notifications',
+      channelDescription: 'Fires text extraction indicators to status trays securely',
+      importance: Importance.max, // FIXED: High priority ensures the icon stays stuck on top of the screen
       priority: Priority.high,
-      playSound: isSoundActive, // FIXED: Explicitly turns off the sound channel track
-      enableVibration: isSoundActive, // FIXED: Turns off vibration mechanics
+      playSound: isSoundActive, 
+      enableVibration: isSoundActive,
       showWhen: true,
+      ongoing: false, // Allows users to swipe it away manually whenever they choose
       styleInformation: const BigTextStyleInformation(''),
     );
     
@@ -87,28 +88,34 @@ class OcrService {
       final prefs = await SharedPreferences.getInstance();
       bool userSoundSetting = prefs.getBool('ocr_sound_enabled') ?? true;
 
-      // FIXED: Smart Text Overlap Filter Engine
       List<String> history = prefs.getStringList('ocr_history') ?? [];
-      
-      if (history.isNotEmpty) {
-        Map<String, dynamic> lastEntry = jsonDecode(history.first);
-        String lastExtractedText = lastEntry['text'] ?? '';
-        
-        // If the old text is found inside the new longer text, erase the old temporary segment card instantly
-        if (cleanText.contains(lastExtractedText) || lastExtractedText.contains(cleanText.substring(0, lastExtractedText.length > cleanText.length ? cleanText.length : lastExtractedText.length))) {
-          // Permanently erase the old file path reference from storage to prevent gallery clutter
-          String oldImagePath = lastEntry['image_path'] ?? '';
-          if (oldImagePath.isNotEmpty && oldImagePath != path) {
-            await deleteScreenshotFile(oldImagePath);
+      List<String> itemsToRemove = [];
+
+      // FIXED: Global Text Matrix Contraction Filter Engine iterating across all local task inbox profiles
+      for (String itemStr in history) {
+        try {
+          Map<String, dynamic> existingEntry = jsonDecode(itemStr);
+          String existingText = existingEntry['text'] ?? '';
+          String oldImagePath = existingEntry['image_path'] ?? '';
+
+          if (existingText.isNotEmpty) {
+            // If the old text segment matches or overlaps our new text block, queue the old card for full deletion
+            if (cleanText.contains(existingText) || existingText.contains(cleanText) || 
+                (cleanText.length > 15 && existingText.contains(cleanText.substring(0, 15)))) {
+              itemsToRemove.add(itemStr);
+              if (oldImagePath.isNotEmpty && oldImagePath != path) {
+                await deleteScreenshotFile(oldImagePath); // Delete incomplete screenshot files from gallery storage
+              }
+            }
           }
-          history.removeAt(0); // Pop old card segment from the history stack layout
-        }
+        } catch (_) {}
       }
 
-      // Automatically push the newest complete paragraph block text to clip board buffer
+      // Drop all incomplete matched artifacts instantly out of our history logs list stack
+      history.removeWhere((element) => itemsToRemove.contains(element));
+
       await FlutterClipboard.copy(cleanText);
       
-      // Update history storage list layout bounds
       history.insert(0, jsonEncode({
         'text': cleanText,
         'timestamp': DateTime.now().toIso8601String(),
