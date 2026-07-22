@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://android.com"
     package="com.mossiemostert22.screenshot_ocr">
 
@@ -13,7 +14,8 @@
     <application
         android:label="screenshot_ocr"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true">
         
         <activity
             android:name=".MainActivity"
