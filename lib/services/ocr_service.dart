@@ -13,8 +13,6 @@ class OcrService {
   Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
-  bool isStitchingModeActive = false;
-
   void initialize() async {
     _channel.setMethodCallHandler(_handleMethodCall);
     await _initNotifications();
@@ -28,37 +26,33 @@ class OcrService {
     await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
-
-    // Show a standout notification using brand new unique channel IDs to reset Android's audio cache
-  Future<void> showStandoutNotification(String snippetText, {required bool forceSilence}) async {
-    final AndroidNotificationDetails androidPlatformChannelSpecifics =
+  /// Plays exactly ONE pleasant priority alert sound when the complete text extraction finishes
+  Future<void> showSingleTaskNotification(String snippetText) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      // FIXED: New channel IDs (_v4) to force Android to drop the old cached beep rules
-      forceSilence ? 'ocr_chan_pure_silent_v4' : 'ocr_chan_loud_priority_v4',
-      forceSilence ? 'Silent Capture Mode' : 'OCR Extraction Complete',
-      channelDescription: 'Manages sound separation during screenshot processing tasks',
-      importance: forceSilence ? Importance.low : Importance.max,
-      priority: forceSilence ? Priority.low : Priority.high,
-      playSound: !forceSilence, // Kills the audio beep track completely for silent frames
-      enableVibration: !forceSilence,
+      'ocr_task_inbox_channel_v1',
+      'Task Inbox Notifications',
+      channelDescription: 'Fires one clean sound alert per finalized screenshot text extraction',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true, 
+      enableVibration: true,
       showWhen: true,
-      styleInformation: const BigTextStyleInformation(''),
+      styleInformation: BigTextStyleInformation(''),
     );
     
-    final NotificationDetails platformChannelSpecifics =
+    const NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
     
-    String displaySnippet = snippetText.length > 40 ? '${snippetText.substring(0, 40)}...' : snippetText;
+    String displaySnippet = snippetText.length > 45 ? '${snippetText.substring(0, 45)}...' : snippetText;
 
     await _notificationsPlugin.show(
-      // FIXED: Unique notification identifiers prevent tray duplicates
-      id: forceSilence ? 199 : 200,
-      title: forceSilence ? '📸 Stitch Frame Buffered' : '🔍 [T] SCROLL TEXT EXTRACTED!',
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000, // Unique task ID matching your email inbox analogy
+      title: '📩 NEW TEXT EXTRACTED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
   }
-
 
   Future<void> _handleMethodCall(MethodCall call) async {
     if (call.method == "onScreenshotTaken") {
@@ -77,22 +71,23 @@ class OcrService {
       String cleanText = _cleanupText(recognizedText.text);
       
       if (cleanText.trim().isEmpty) {
-        if (onOcrError != null) onOcrError!("No text found in screenshot.");
-        return;
+        return; // Quietly ignore empty images without throwing annoying errors
       }
 
-      if (!isStitchingModeActive) {
-        await FlutterClipboard.copy(cleanText);
-        await _saveToHistory(cleanText, path);
-      }
+      // Copy directly to the system clip board automatically
+      await FlutterClipboard.copy(cleanText);
       
-      await showStandoutNotification(cleanText, forceSilence: isStitchingModeActive);
+      // Save it into our shared persistent history file log
+      await _saveToHistory(cleanText, path);
+      
+      // Fire exactly ONE priority alert notification block
+      await showSingleTaskNotification(cleanText);
 
       if (onOcrComplete != null) {
         onOcrComplete!(cleanText, path);
       }
     } catch (e) {
-      if (onOcrError != null) onOcrError!("OCR Processing Failed: ${e.toString()}");
+      if (onOcrError != null) onOcrError!("Processing Block Failed: ${e.toString()}");
     }
   }
 
