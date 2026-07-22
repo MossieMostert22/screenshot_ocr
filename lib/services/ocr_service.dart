@@ -10,6 +10,9 @@ class OcrService {
   final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
   final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
   
+  // Track notification IDs to support instant clearing layouts
+  static const int _taskNotificationId = 5001;
+
   Function(String, String)? onOcrComplete;
   Function(String)? onOcrError;
 
@@ -23,35 +26,46 @@ class OcrService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
-    await _notificationsPlugin.initialize(settings: initializationSettings);
+    
+    await _notificationsPlugin.initialize(
+      settings: initializationSettings,
+    );
   }
 
-  /// Plays exactly ONE pleasant priority alert sound when the complete text extraction finishes
-  Future<void> showSingleTaskNotification(String snippetText) async {
-    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+  /// Fires a clean sound alert based on the user's dashboard configuration setting
+  Future<void> showSingleTaskNotification(String snippetText, bool isSoundActive) async {
+    final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'ocr_task_inbox_channel_v1',
-      'Task Inbox Notifications',
-      channelDescription: 'Fires one clean sound alert per finalized screenshot text extraction',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true, 
-      enableVibration: true,
+      // FIXED: Uses dynamic channel toggling to bypass Android's immutable channel cache bug
+      isSoundActive ? 'ocr_inbox_sound_chan_v6' : 'ocr_inbox_mute_chan_v6',
+      isSoundActive ? 'Audible Task Inbox Alerts' : 'Silent Task Inbox Alerts',
+      channelDescription: 'Handles incoming text notifications based on dashboard settings',
+      importance: isSoundActive ? Importance.max : Importance.low,
+      priority: isSoundActive ? Priority.high : Priority.low,
+      playSound: isSoundActive, 
+      enableVibration: isSoundActive,
       showWhen: true,
-      styleInformation: BigTextStyleInformation(''),
+      styleInformation: const BigTextStyleInformation(''),
     );
     
-    const NotificationDetails platformChannelSpecifics =
+    final NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
     
     String displaySnippet = snippetText.length > 45 ? '${snippetText.substring(0, 45)}...' : snippetText;
 
+    // FIXED: Named parameters matching latest library rules
     await _notificationsPlugin.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000, // Unique task ID matching your email inbox analogy
+      id: _taskNotificationId, 
       title: '📩 NEW TEXT EXTRACTED!',
       body: displaySnippet,
       notificationDetails: platformChannelSpecifics,
     );
+  }
+
+  /// Instantly wipes our application's notification banner from the top system tray
+  Future<void> clearActiveNotificationTray() async {
+    // FIXED: Explicitly named the target cancel ID parameter
+    await _notificationsPlugin.cancel(id: _taskNotificationId);
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -71,17 +85,16 @@ class OcrService {
       String cleanText = _cleanupText(recognizedText.text);
       
       if (cleanText.trim().isEmpty) {
-        return; // Quietly ignore empty images without throwing annoying errors
+        return; 
       }
 
-      // Copy directly to the system clip board automatically
+      final prefs = await SharedPreferences.getInstance();
+      bool userSoundSetting = prefs.getBool('ocr_sound_enabled') ?? true;
+
       await FlutterClipboard.copy(cleanText);
-      
-      // Save it into our shared persistent history file log
       await _saveToHistory(cleanText, path);
       
-      // Fire exactly ONE priority alert notification block
-      await showSingleTaskNotification(cleanText);
+      await showSingleTaskNotification(cleanText, userSoundSetting);
 
       if (onOcrComplete != null) {
         onOcrComplete!(cleanText, path);
@@ -125,3 +138,4 @@ class OcrService {
     _textRecognizer.close();
   }
 }
+

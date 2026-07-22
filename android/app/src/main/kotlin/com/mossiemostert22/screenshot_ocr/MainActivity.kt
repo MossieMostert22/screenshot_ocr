@@ -63,7 +63,7 @@ class MainActivity : FlutterActivity() {
                 super.onChange(selfChange, uri)
                 
                 val currentTime = System.currentTimeMillis()
-                if ((currentTime - lastProcessedTime) < 2500) {
+                if ((currentTime - lastProcessedTime) < 6000) {
                     return
                 }
                 lastProcessedTime = currentTime

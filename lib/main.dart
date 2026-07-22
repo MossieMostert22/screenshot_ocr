@@ -19,11 +19,17 @@ class ScreenshotOcrApp extends StatelessWidget {
       title: 'Instant Screenshot OCR',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.light),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.light,
+        ),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple, brightness: Brightness.dark),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
       ),
       home: const HomePage(),
@@ -38,25 +44,33 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with RouteAware, WidgetsBindingObserver {
   final OcrService _ocrService = OcrService();
   List<Map<String, dynamic>> _ocrHistoryList = [];
   bool _autoCopyEnabled = true;
+  bool _soundAlertsEnabled =
+      true; // FIXED: New layout state variable for sound toggle hooks
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _requestAppPermissions();
+    _loadLocalAppSettings();
     _loadLocalHistory();
     _ocrService.initialize();
 
-    // Fires exactly ONCE when Android completely finishes saving a screenshot file
     _ocrService.onOcrComplete = (String extractedText, String imagePath) {
-      _loadLocalHistory(); // Auto-refresh our inbox list view model layout instantly
+      _loadLocalHistory();
+      _ocrService
+          .clearActiveNotificationTray(); // Auto-wipe notice instantly if app is in view
       if (_autoCopyEnabled && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("✨ Text extracted & copied to clipboard! Check your inbox list below."),
+            content: Text(
+              "✨ Text extracted & copied to clipboard! Check your inbox list below.",
+            ),
             behavior: SnackBarBehavior.floating,
             duration: Duration(seconds: 3),
           ),
@@ -67,13 +81,32 @@ class _HomePageState extends State<HomePage> {
     _ocrService.onOcrError = (String errorMsg) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("❌ $errorMsg"), behavior: SnackBarBehavior.floating),
+        SnackBar(
+          content: Text("❌ $errorMsg"),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     };
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // FIXED: Clear out top notifications tray immediately the moment user opens/re-enters the app screen
+    if (state == AppLifecycleState.resumed) {
+      _ocrService.clearActiveNotificationTray();
+    }
+  }
+
   Future<void> _requestAppPermissions() async {
     await [Permission.notification, Permission.systemAlertWindow].request();
+  }
+
+  Future<void> _loadLocalAppSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _autoCopyEnabled = prefs.getBool('ocr_auto_copy') ?? true;
+      _soundAlertsEnabled = prefs.getBool('ocr_sound_enabled') ?? true;
+    });
   }
 
   Future<void> _loadLocalHistory() async {
@@ -81,47 +114,79 @@ class _HomePageState extends State<HomePage> {
     final List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
     if (!mounted) return;
     setState(() {
-      _ocrHistoryList = rawHistory.map((item) => jsonDecode(item) as Map<String, dynamic>).toList();
+      _ocrHistoryList = rawHistory
+          .map((item) => jsonDecode(item) as Map<String, dynamic>)
+          .toList();
     });
   }
 
-  Future<void> _inlineDeleteEntry(int index, String imagePath) async {
-    // 1. Permanently delete the screenshot image file from the phone storage gallery
-    bool fileDeleted = await _ocrService.deleteScreenshotFile(imagePath);
-    
-    // 2. Clear out the inbox card log from our dashboard history log list
-    final prefs = await SharedPreferences.getInstance();
-    List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
-    
-    if (index < rawHistory.length) {
-      rawHistory.removeAt(index);
-      await prefs.setStringList('ocr_history', rawHistory);
-      await _loadLocalHistory();
-    }
+  /// FIXED: Displays your exact custom confirmation wording before invoking file erasure blocks
+  Future<void> _triggerSecureDeleteFlow(int index, String imagePath) async {
+    bool? userConfirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+              SizedBox(width: 8),
+              Text("Confirm Erasure"),
+            ],
+          ),
+          content: const Text(
+            "This will delete the screenshot from your device permanently, are you sure?",
+          ),
+          actions: [
+            TextButton(
+              child: const Text("No"),
+              onPressed: () => Navigator.of(context).pop(false),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+              child: const Text("Yes"),
+              onPressed: () => Navigator.of(context).pop(true),
+            ),
+          ],
+        );
+      },
+    );
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(fileDeleted 
-              ? "🗑️ Screenshot file and log entry permanently erased!" 
-              : "Inbox entry removed from application view profile logs."),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
+    if (userConfirmed == true) {
+      _ocrService
+          .clearActiveNotificationTray(); // Clear layout tracking instantly
+      bool fileDeleted = await _ocrService.deleteScreenshotFile(imagePath);
 
-  Future<void> _clearAllHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('ocr_history');
-    if (!mounted) return;
-    setState(() {
-      _ocrHistoryList.clear();
-    });
+      final prefs = await SharedPreferences.getInstance();
+      List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+
+      if (index < rawHistory.length) {
+        rawHistory.removeAt(index);
+        await prefs.setStringList('ocr_history', rawHistory);
+        await _loadLocalHistory();
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              fileDeleted
+                  ? "🗑️ Screenshot file and log entry permanently erased!"
+                  : "Inbox entry removed from application view profile logs.",
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ocrService.dispose();
     super.dispose();
   }
@@ -133,41 +198,63 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Instant Screenshot OCR'),
         centerTitle: true,
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          if (_ocrHistoryList.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.delete_sweep),
-              tooltip: 'Clear All Task Logs',
-              onPressed: _clearAllHistory,
-            ),
-        ],
+        // FIXED: Master sweep sweep button completely removed from top header to protect device storage files layout
       ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.all(12.0),
             child: Card(
               elevation: 2,
-              child: SwitchListTile(
-                title: const Text('Auto-copy to Clipboard'),
-                subtitle: const Text('Instantly inject extracted text into phone buffer'),
-                value: _autoCopyEnabled,
-                onChanged: (bool value) {
-                  setState(() {
-                    _autoCopyEnabled = value;
-                  });
-                },
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: const Text('Auto-copy to Clipboard'),
+                    subtitle: const Text(
+                      'Instantly inject extracted text into phone buffer',
+                    ),
+                    value: _autoCopyEnabled,
+                    onChanged: (bool value) async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('ocr_auto_copy', value);
+                      setState(() {
+                        _autoCopyEnabled = value;
+                      });
+                    },
+                  ),
+                  const Divider(height: 1, indent: 16, endIndent: 16),
+                  // FIXED: New Settings Toggle Switch allowing instant notification audio muting/unmuting rules
+                  SwitchListTile(
+                    title: const Text('Notification Sound Effects'),
+                    subtitle: const Text(
+                      'Enable audio beep sounds when text parsing completes',
+                    ),
+                    value: _soundAlertsEnabled,
+                    onChanged: (bool value) async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('ocr_sound_enabled', value);
+                      setState(() {
+                        _soundAlertsEnabled = value;
+                      });
+                    },
+                  ),
+                ],
               ),
             ),
           ),
 
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 4.0,
+            ),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 'Your Task Inbox (${_ocrHistoryList.length})',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
               ),
             ),
           ),
@@ -180,8 +267,14 @@ class _HomePageState extends State<HomePage> {
                       children: [
                         Icon(Icons.mail_outline, size: 64, color: Colors.grey),
                         SizedBox(height: 16),
-                        Text('Your processing inbox is empty', style: TextStyle(color: Colors.grey)),
-                        Text('Take a standard or scroll screenshot to populate!', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        Text(
+                          'Your processing inbox is empty',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                        Text(
+                          'Take a standard or scroll screenshot to populate!',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
                       ],
                     ),
                   )
@@ -192,23 +285,33 @@ class _HomePageState extends State<HomePage> {
                       final item = _ocrHistoryList[index];
                       final textSnippet = item['text'] ?? '';
                       final savedImagePath = item['image_path'] ?? '';
-                      
+
                       return Card(
                         margin: const EdgeInsets.symmetric(vertical: 6),
                         child: ListTile(
-                          title: Text(textSnippet, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+                          title: Text(
+                            textSnippet,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
                           trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.redAccent,
+                            ),
                             tooltip: 'Erase Screenshot File & Log',
-                            onPressed: () => _inlineDeleteEntry(index, savedImagePath),
+                            onPressed: () =>
+                                _triggerSecureDeleteFlow(index, savedImagePath),
                           ),
                           onTap: () {
-                            // Let the user view or share the full text when tapping the inbox entry card
                             showDialog(
                               context: context,
                               builder: (context) => AlertDialog(
                                 title: const Text("Extracted Task Content"),
-                                content: SingleChildScrollView(child: Text(textSnippet)),
+                                content: SingleChildScrollView(
+                                  child: Text(textSnippet),
+                                ),
                                 actions: [
                                   TextButton(
                                     onPressed: () => Navigator.pop(context),
