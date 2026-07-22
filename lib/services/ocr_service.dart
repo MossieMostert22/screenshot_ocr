@@ -20,14 +20,18 @@ class OcrService {
     await _initNotifications();
   }
 
-  Future<void> _initNotifications() async {
+    Future<void> _initNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
     
-    await _notificationsPlugin.initialize(initializationSettings);
+    // FIXED: Added the actual required 'settings:' keyword constraint for version 22+
+    await _notificationsPlugin.initialize(
+      settings: initializationSettings,
+    );
   }
+
 
   Future<void> showSingleTaskNotification(String snippetText, bool isSoundActive) async {
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
@@ -48,16 +52,18 @@ class OcrService {
     
     String displaySnippet = snippetText.length > 45 ? '${snippetText.substring(0, 45)}...' : snippetText;
 
+    // ENFORCED: Modern version explicit named parameter mapping loops
     await _notificationsPlugin.show(
-      _taskNotificationId, 
-      '📩 NEW TEXT EXTRACTED!',
-      displaySnippet,
-      platformChannelSpecifics,
+      id: _taskNotificationId, 
+      title: '📩 NEW TEXT EXTRACTED!',
+      body: displaySnippet,
+      notificationDetails: platformChannelSpecifics,
     );
   }
 
   Future<void> clearActiveNotificationTray() async {
-    await _notificationsPlugin.cancel(_taskNotificationId);
+    // ENFORCED: Modern version named parameter cancel execution
+    await _notificationsPlugin.cancel(id: _taskNotificationId);
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {

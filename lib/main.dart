@@ -6,7 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
 //import 'package:path_provider/path_provider.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:flutter_foreground_task/ui/with_foreground_task.dart';
+//import 'package:flutter_foreground_task/ui/with_foreground_task.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'services/ocr_service.dart';
