@@ -1,12 +1,9 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
-//import 'package:path_provider/path_provider.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-//import 'package:flutter_foreground_task/ui/with_foreground_task.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'services/ocr_service.dart';
@@ -38,7 +35,7 @@ class ScreenshotOcrApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: WithForegroundTask(child: const HomePage()),
+      home: const HomePage(),
     );
   }
 }
@@ -65,13 +62,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _initializeApplicationSequence() async {
     await _requestAppPermissions();
-     _initForegroundTaskSystem();
     await _loadLocalAppSettings();
     await _loadLocalHistory();
     _ocrService.initialize();
 
-    _ocrService.onOcrComplete = (String extractedText, String imagePath) {
-      _loadLocalHistory();
+    // The native ScreenshotWatcherService does all detection/OCR now. It pings
+    // us here (only while the UI is open) so the inbox refreshes instantly.
+    _ocrService.onHistoryChanged = () async {
+      await _loadLocalHistory();
       if (_autoCopyEnabled && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -84,22 +82,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         );
       }
     };
-
-    _ocrService.onOcrError = (String errorMsg) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("❌ $errorMsg"),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    };
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _ocrService.clearActiveNotificationTray();
+      // The service may have processed screenshots while we were away.
+      _loadLocalHistory();
     }
   }
 
@@ -115,37 +105,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _initForegroundTaskSystem() async {
-    final notificationOpts = AndroidNotificationOptions(
-      channelId: 'ocr_service_survival_channel',
-      channelName: 'Background Service Survival Monitor',
-      channelDescription:
-          'Maintains media observers awake when the application UI layer is closed.',
-      channelImportance: NotificationChannelImportance.LOW,
-      priority: NotificationPriority.LOW,
-    );
-
-    // FIXED: Split out into standard runtime initialization parameters to remove hidden compile-time constants
-    final taskOptions = ForegroundTaskOptions(
-      eventAction: ForegroundTaskEventAction.nothing(),
-      allowWakeLock: true,
-    );
-
-    FlutterForegroundTask.init(
-      androidNotificationOptions: notificationOpts,
-      iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: taskOptions,
-    );
-
-    if (!await FlutterForegroundTask.isRunningService) {
-      await FlutterForegroundTask.startService(
-        notificationTitle: 'Screenshot OCR Tracking Active',
-        notificationText:
-            'App inbox background tracking is awake and protected.',
-      );
-    }
-  }
-
   Future<void> _loadLocalAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -156,12 +115,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _loadLocalHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+    // IMPORTANT: the native service writes history from outside the Flutter
+    // cache, so we must reload from disk before reading.
+    await prefs.reload();
+
+    String? rawJson = prefs.getString('ocr_history_json');
+
+    // One-time migration from the old List<String> storage format.
+    if (rawJson == null) {
+      final List<String>? legacy = prefs.getStringList('ocr_history');
+      if (legacy != null && legacy.isNotEmpty) {
+        rawJson = '[${legacy.join(',')}]';
+        await prefs.setString('ocr_history_json', rawJson);
+        await prefs.remove('ocr_history');
+      }
+    }
+
     if (!mounted) return;
-    setState(() {
-      _ocrHistoryList = rawHistory
-          .map((item) => jsonDecode(item) as Map<String, dynamic>)
+    List<Map<String, dynamic>> parsed = [];
+    try {
+      final List<dynamic> decoded = jsonDecode(rawJson ?? '[]');
+      parsed = decoded
+          .whereType<Map<String, dynamic>>()
           .toList();
+    } catch (_) {}
+
+    setState(() {
+      _ocrHistoryList = parsed;
     });
   }
 
@@ -310,13 +290,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       bool fileDeleted = await _ocrService.deleteScreenshotFile(imagePath);
 
       final prefs = await SharedPreferences.getInstance();
-      List<String> rawHistory = prefs.getStringList('ocr_history') ?? [];
+      await prefs.reload();
+      final String rawJson = prefs.getString('ocr_history_json') ?? '[]';
 
-      if (index < rawHistory.length) {
-        rawHistory.removeAt(index);
-        await prefs.setStringList('ocr_history', rawHistory);
-        await _loadLocalHistory();
-      }
+      try {
+        final List<dynamic> list = jsonDecode(rawJson);
+        if (index < list.length) {
+          list.removeAt(index);
+          await prefs.setString('ocr_history_json', jsonEncode(list));
+        }
+      } catch (_) {}
+      await _loadLocalHistory();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
