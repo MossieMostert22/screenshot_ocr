@@ -25,8 +25,10 @@ class MainActivity : FlutterActivity() {
     private var screenshotObserver: ContentObserver? = null
     private var deleteResultCallback: MethodChannel.Result? = null
 
-    // TARGETED ID BARRIER: Tracks specific media database row IDs instead of clock times
-    private val processedMediaIds = HashSet<Long>()
+    // VERSION BARRIER: Tracks each media row ID together with the file SIZE we last processed.
+    // A scroll capture reuses the SAME row ID for the first frame and the final stitched image,
+    // so we must re-process an ID whenever its underlying file content (size) changes.
+    private val processedMediaVersions = HashMap<Long, Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,6 +61,13 @@ class MainActivity : FlutterActivity() {
         registerScreenshotObserver()
     }
 
+    // Holds the verified state of a screenshot row at the moment the observer fired
+    private data class ScreenshotState(
+        val filePath: String,
+        val isPending: Boolean,
+        val fileSize: Long
+    )
+
     private fun registerScreenshotObserver() {
         screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
@@ -66,16 +75,25 @@ class MainActivity : FlutterActivity() {
                 if (uri == null) return
 
                 try {
-                    // Extract unique database entry row ID numbers from incoming notification payloads
+                    // Item-level URIs carry the media row ID; collection-level signals throw and are ignored
                     val currentId = ContentUris.parseId(uri)
-                    
-                    // FIXED: Instantly drop duplicate signals if this exact image asset ID has been handled
-                    if (processedMediaIds.contains(currentId)) return
-                    processedMediaIds.add(currentId)
+
+                    val state = queryScreenshotState(applicationContext, currentId) ?: return
+
+                    // Samsung marks the row as "pending" while a scroll capture is still being
+                    // written. Skip it silently: a final onChange fires when the file is complete.
+                    if (state.isPending || state.fileSize <= 0L) return
+
+                    // Drop exact duplicate signals for content we already processed (prevents
+                    // notification/beep storms), but let CHANGED content through so the final
+                    // stitched scroll image replaces the first-frame text in the inbox.
+                    if (processedMediaVersions[currentId] == state.fileSize) return
+                    processedMediaVersions[currentId] = state.fileSize
 
                     // Enforce cache cleanup bounds
-                    if (processedMediaIds.size > 100) {
-                        processedMediaIds.clear()
+                    if (processedMediaVersions.size > 200) {
+                        processedMediaVersions.clear()
+                        processedMediaVersions[currentId] = state.fileSize
                     }
 
                     val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -83,11 +101,7 @@ class MainActivity : FlutterActivity() {
                     wakeLock.acquire(4000)
 
                     Handler(Looper.getMainLooper()).postDelayed({
-                        // FIXED: Scan recent files using non-deprecated metadata rules
-                        val filePath = verifyAndGetRecentScreenshotPath(applicationContext, currentId)
-                        if (filePath != null) {
-                            forwardScreenshotToFlutter(applicationContext, filePath)
-                        }
+                        forwardScreenshotToFlutter(applicationContext, state.filePath)
                     }, 800)
                 } catch (_: Exception) {}
             }
@@ -96,13 +110,20 @@ class MainActivity : FlutterActivity() {
         contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver!!)
     }
 
-    private fun verifyAndGetRecentScreenshotPath(context: Context, targetId: Long): String? {
-        // FIXED: Replaced deprecated DATA column references with current DISPLAY_NAME asset parameters
-        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
-        
+    private fun queryScreenshotState(context: Context, targetId: Long): ScreenshotState? {
+        val projection = mutableListOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.RELATIVE_PATH,
+            MediaStore.Images.Media.SIZE
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            projection.add(MediaStore.Images.Media.IS_PENDING)
+        }
+
         val cursor: Cursor? = context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection,
+            projection.toTypedArray(),
             "${MediaStore.Images.Media._ID} = ?",
             arrayOf(targetId.toString()),
             null
@@ -110,15 +131,20 @@ class MainActivity : FlutterActivity() {
 
         cursor?.use {
             if (it.moveToFirst()) {
-                val nameIndex = it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                val pathIndex = it.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-                val fileName = it.getString(nameIndex)
-                val relPath = it.getString(pathIndex)
+                val fileName = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)) ?: return null
+                val relPath = it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)) ?: ""
+                val size = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE))
+                val pending = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    it.getInt(it.getColumnIndexOrThrow(MediaStore.Images.Media.IS_PENDING)) == 1
+                } else {
+                    false
+                }
 
-                // Match against screenshots directories cleanly without scoped tracking errors
+                // Only react to files living in a Screenshots location
                 if (fileName.contains("Screenshot", ignoreCase = true) || relPath.contains("Screenshot", ignoreCase = true)) {
                     val rootDir = context.getExternalFilesDir(null)?.parentFile?.parentFile?.parentFile?.parentFile
-                    return File(rootDir, "$relPath$fileName").absolutePath
+                    val fullPath = File(rootDir, "$relPath$fileName").absolutePath
+                    return ScreenshotState(fullPath, pending, size)
                 }
             }
         }
@@ -130,7 +156,7 @@ class MainActivity : FlutterActivity() {
             val context = applicationContext
             val file = File(filePath)
             val projection = arrayOf(MediaStore.Images.Media._ID)
-            
+
             val cursor = context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection,
