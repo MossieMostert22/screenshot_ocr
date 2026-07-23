@@ -48,4 +48,6 @@ flutter {
 // FIXED: Added the explicit dependencies code block block for Kotlin DSL compilation support
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Native ML Kit text recognition: the background service runs OCR without the Flutter engine
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }
