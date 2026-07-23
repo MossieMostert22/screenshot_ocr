@@ -44,6 +44,14 @@ class ScreenshotOcrApp extends StatelessWidget {
   }
 }
 
+/// One page-sized horizontal strip of a screenshot, with the exact height
+/// (in PDF points) it must occupy on the page.
+class _PdfImageSlice {
+  final Uint8List bytes;
+  final double displayHeight;
+  _PdfImageSlice(this.bytes, this.displayHeight);
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -168,32 +176,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           builder: (context, setDialogState) {
             return AlertDialog(
               title: const Text("Save to Documents"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: fileNameController,
-                    decoration: const InputDecoration(
-                      hintText: "Enter custom filename (e.g. MyRecipe)",
-                      suffixText: ".pdf",
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  if (imageAvailable)
-                    CheckboxListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text(
-                        "Include screenshot image",
-                        style: TextStyle(fontSize: 14),
+              // Scrollable so the keyboard can never overflow the dialog.
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: fileNameController,
+                      decoration: const InputDecoration(
+                        hintText: "Enter custom filename (e.g. MyRecipe)",
+                        suffixText: ".pdf",
+                        border: OutlineInputBorder(),
                       ),
-                      value: includeImage,
-                      onChanged: (v) {
-                        setDialogState(() {
-                          includeImage = v ?? true;
-                        });
-                      },
                     ),
-                ],
+                    if (imageAvailable)
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text(
+                          "Include screenshot image",
+                          style: TextStyle(fontSize: 14),
+                        ),
+                        value: includeImage,
+                        onChanged: (v) {
+                          setDialogState(() {
+                            includeImage = v ?? true;
+                          });
+                        },
+                      ),
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -287,12 +299,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ];
 
     if (imagePath != null) {
-      final List<Uint8List> slices = await _sliceImageForPdf(imagePath);
+      final List<_PdfImageSlice> slices = await _sliceImageForPdf(imagePath);
       for (final slice in slices) {
         content.add(
           pw.Padding(
             padding: const pw.EdgeInsets.only(bottom: 6),
-            child: pw.Image(pw.MemoryImage(slice), fit: pw.BoxFit.fitWidth),
+            // Explicit dimensions: the pdf library lays images out at natural
+            // pixel size otherwise, overflowing the page.
+            child: pw.SizedBox(
+              width: 531.0,
+              height: slice.displayHeight,
+              child: pw.Image(pw.MemoryImage(slice.bytes), fit: pw.BoxFit.fill),
+            ),
           ),
         );
       }
@@ -332,7 +350,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Cuts a (possibly very tall scroll-capture) screenshot into page-sized
   /// horizontal slices so the PDF shows the WHOLE image across multiple
   /// pages instead of one unreadably shrunken thumbnail.
-  Future<List<Uint8List>> _sliceImageForPdf(String path) async {
+  Future<List<_PdfImageSlice>> _sliceImageForPdf(String path) async {
     try {
       final Uint8List bytes = await File(path).readAsBytes();
       final ui.Codec codec = await ui.instantiateImageCodec(bytes);
@@ -346,7 +364,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final double scale = contentWidthPts / fullImage.width;
       final int sliceHeightPx = math.max(1, (sliceHeightPts / scale).floor());
 
-      final List<Uint8List> slices = [];
+      final List<_PdfImageSlice> slices = [];
       int y = 0;
       while (y < fullImage.height) {
         final int h = math.min(sliceHeightPx, fullImage.height - y);
@@ -374,7 +392,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final ByteData? byteData =
             await sliceImage.toByteData(format: ui.ImageByteFormat.png);
         if (byteData != null) {
-          slices.add(byteData.buffer.asUint8List());
+          final double displayHeight =
+              math.min(h * scale, sliceHeightPts);
+          slices.add(
+            _PdfImageSlice(byteData.buffer.asUint8List(), displayHeight),
+          );
         }
         sliceImage.dispose();
         picture.dispose();
