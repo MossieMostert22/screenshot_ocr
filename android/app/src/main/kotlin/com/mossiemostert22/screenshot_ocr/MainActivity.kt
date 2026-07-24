@@ -4,11 +4,14 @@ import android.app.Activity
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -16,11 +19,10 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /**
- * The activity is now a pure VIEWER. All screenshot detection and OCR moved
- * into ScreenshotWatcherService, which survives the app being swiped away.
- * The activity's remaining jobs: start the service, refresh the Flutter UI
- * when the service broadcasts a new result, and run the secure-delete flow
- * (which needs an activity for the system confirmation dialog).
+ * The activity is a pure VIEWER plus the user-interaction endpoints that
+ * genuinely need an Activity: the secure-delete confirmation flow and the
+ * PDF save/open/share/delete handlers for the Saved Files feature.
+ * All screenshot detection and OCR lives in ScreenshotWatcherService.
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "screenshot_channel"
@@ -66,6 +68,22 @@ class MainActivity : FlutterActivity() {
                         result.success(false)
                     }
                 }
+                "savePdfToDocuments" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val fileName = call.argument<String>("fileName")
+                    if (bytes == null || fileName.isNullOrBlank()) {
+                        result.success(null)
+                    } else {
+                        val saved = savePdfToDocuments(bytes, fileName)
+                        result.success(
+                            saved?.let { mapOf("uri" to it.first, "name" to it.second) }
+                        )
+                    }
+                }
+                "renderPdfThumbnail" -> result.success(renderPdfThumbnail(call.argument<String>("uri")))
+                "openSavedPdf" -> result.success(openSavedPdf(call.argument<String>("uri")))
+                "shareSavedPdf" -> result.success(shareSavedPdf(call.argument<String>("uri")))
+                "deleteSavedPdf" -> result.success(deleteSavedPdf(call.argument<String>("uri")))
                 else -> result.notImplemented()
             }
         }
@@ -86,6 +104,148 @@ class MainActivity : FlutterActivity() {
             registerReceiver(refreshReceiver, filter)
         }
     }
+
+    // ------------------------------------------------------------------
+    // Saved Files: MediaStore-based PDF persistence (no MANAGE_EXTERNAL_STORAGE)
+    // ------------------------------------------------------------------
+
+    /**
+     * Writes the PDF into the public Documents/Screenshot OCR folder through
+     * MediaStore. On Android 10+ this needs NO storage permission at all —
+     * apps may always create their own documents. Returns (contentUri,
+     * actualDisplayName) — MediaStore may auto-rename duplicates.
+     */
+    private fun savePdfToDocuments(bytes: ByteArray, rawName: String): Pair<String, String>? {
+        return try {
+            val name = if (rawName.endsWith(".pdf", ignoreCase = true)) rawName else "$rawName.pdf"
+            val resolver = applicationContext.contentResolver
+            val collection = MediaStore.Files.getContentUri("external")
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Documents/Screenshot OCR")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val dir = File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+                        "Screenshot OCR"
+                    )
+                    if (!dir.exists()) dir.mkdirs()
+                    @Suppress("DEPRECATION")
+                    put(MediaStore.MediaColumns.DATA, File(dir, name).absolutePath)
+                }
+            }
+
+            val uri = resolver.insert(collection, values) ?: return null
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return null
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                resolver.update(uri, done, null, null)
+            }
+
+            // Read back the real display name (MediaStore may have added " (1)").
+            var finalName = name
+            resolver.query(
+                uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null
+            )?.use {
+                if (it.moveToFirst()) {
+                    finalName = it.getString(0) ?: name
+                }
+            }
+            Pair(uri.toString(), finalName)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Renders page 1 of a saved PDF into a small PNG for the Saved Files list. */
+    private fun renderPdfThumbnail(uriStr: String?): ByteArray? {
+        if (uriStr.isNullOrBlank()) return null
+        return try {
+            val pfd = applicationContext.contentResolver
+                .openFileDescriptor(Uri.parse(uriStr), "r") ?: return null
+            pfd.use { descriptor ->
+                android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
+                    if (renderer.pageCount < 1) return null
+                    renderer.openPage(0).use { page ->
+                        val scale = 200f / page.width
+                        val bmpW = 200
+                        // Tall continuous pages: show just the top portion.
+                        val bmpH = (page.height * scale).toInt()
+                            .coerceAtMost(280).coerceAtLeast(1)
+                        val bitmap = android.graphics.Bitmap.createBitmap(
+                            bmpW, bmpH, android.graphics.Bitmap.Config.ARGB_8888
+                        )
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        val matrix = android.graphics.Matrix().apply {
+                            postScale(scale, scale)
+                        }
+                        page.render(
+                            bitmap, null, matrix,
+                            android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                        )
+                        val stream = java.io.ByteArrayOutputStream()
+                        bitmap.compress(
+                            android.graphics.Bitmap.CompressFormat.PNG, 90, stream
+                        )
+                        bitmap.recycle()
+                        stream.toByteArray()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Hands the PDF to whatever viewer the user has installed. */
+    private fun openSavedPdf(uriStr: String?): Boolean {
+        if (uriStr.isNullOrBlank()) return false
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(uriStr), "application/pdf")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Opens the system share sheet (WhatsApp, email, etc.) with the PDF attached. */
+    private fun shareSavedPdf(uriStr: String?): Boolean {
+        if (uriStr.isNullOrBlank()) return false
+        return try {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_STREAM, Uri.parse(uriStr))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Share PDF"))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Deletes a PDF this app created. As the owner, no system prompt is needed. */
+    private fun deleteSavedPdf(uriStr: String?): Boolean {
+        if (uriStr.isNullOrBlank()) return false
+        return try {
+            applicationContext.contentResolver.delete(Uri.parse(uriStr), null, null) > 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Secure delete of screenshot files (unchanged)
+    // ------------------------------------------------------------------
 
     private fun executeSecureDelete(filePath: String) {
         try {
