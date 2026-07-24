@@ -65,6 +65,19 @@ class OcrService {
     }
   }
 
+  /// Runs native ML Kit OCR on any image file (used by gallery import).
+  /// Returns the raw recognized text, or null on failure.
+  Future<String?> runOcrOnImage(String path) async {
+    try {
+      return await _channel.invokeMethod<String>(
+        'runOcrOnImage',
+        {'path': path},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Renders the first page of a saved PDF as a small PNG thumbnail.
   Future<Uint8List?> renderPdfThumbnail(String uri) async {
     try {

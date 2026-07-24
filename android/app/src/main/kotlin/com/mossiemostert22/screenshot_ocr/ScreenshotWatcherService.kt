@@ -67,7 +67,9 @@ class ScreenshotWatcherService : Service() {
         const val KEY_SOUND = "flutter.ocr_sound_enabled"
         const val KEY_AUTOCOPY = "flutter.ocr_auto_copy"
 
-        const val MAX_HISTORY = 50
+        // Raised from 50 so gallery imports (potentially 100+ screenshots)
+        // aren't trimmed away by the next live capture.
+        const val MAX_HISTORY = 200
     }
 
     private var screenshotObserver: ContentObserver? = null
