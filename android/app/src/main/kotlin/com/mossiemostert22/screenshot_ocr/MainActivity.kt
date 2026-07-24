@@ -174,7 +174,8 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** Runs ML Kit OCR on one image file for the gallery-import feature. */
+    /** Runs ML Kit OCR on one image file for the gallery-import feature.
+     *  Uses tiled recognition so tall scroll captures keep full resolution. */
     private fun runOcrOnImage(path: String, result: MethodChannel.Result) {
         try {
             if (importRecognizer == null) {
@@ -182,12 +183,11 @@ class MainActivity : FlutterActivity() {
                     com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
                 )
             }
-            val image = com.google.mlkit.vision.common.InputImage.fromFilePath(
-                this, Uri.fromFile(File(path))
-            )
-            importRecognizer!!.process(image)
-                .addOnSuccessListener { visionText -> result.success(visionText.text) }
-                .addOnFailureListener { result.success(null) }
+            val recognizer = importRecognizer!!
+            Thread {
+                val text = TiledTextOcr.recognize(applicationContext, recognizer, path)
+                runOnUiThread { result.success(text) }
+            }.start()
         } catch (e: Exception) {
             result.success(null)
         }

@@ -269,20 +269,24 @@ class ScreenshotWatcherService : Service() {
 
     private fun runOcrOnScreenshot(path: String) {
         val engine = recognizer ?: return
-        try {
-            val inputImage = InputImage.fromFilePath(this, Uri.fromFile(File(path)))
-            engine.process(inputImage)
-                .addOnSuccessListener { visionText ->
-                    val cleanText = visionText.text
-                        .replace("\n", " ")
-                        .replace(Regex("\\s+"), " ")
-                        .trim()
-                    if (cleanText.isNotEmpty()) {
+        // TiledTextOcr blocks on ML Kit, so run it off the main thread. Tall
+        // scroll captures are recognized in full-resolution segments — feeding
+        // them whole makes ML Kit downscale the text into garbage.
+        Thread {
+            try {
+                val rawText = TiledTextOcr.recognize(applicationContext, engine, path)
+                val cleanText = rawText
+                    ?.replace("\n", " ")
+                    ?.replace(Regex("\\s+"), " ")
+                    ?.trim()
+                    ?: return@Thread
+                if (cleanText.isNotEmpty()) {
+                    Handler(Looper.getMainLooper()).post {
                         handleOcrResult(cleanText, path)
                     }
                 }
-                .addOnFailureListener { /* silent: nothing useful to show the user */ }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }.start()
     }
 
     // ------------------------------------------------------------------
