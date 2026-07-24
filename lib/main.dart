@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
@@ -475,6 +476,123 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await prefs.setString('saved_files_json', jsonEncode(list));
   }
 
+  /// Persists user edits from the card dialog back into the inbox history.
+  Future<void> _updateHistoryEntryText(int index, String newText) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    try {
+      final List<dynamic> list =
+          jsonDecode(prefs.getString('ocr_history_json') ?? '[]');
+      if (index < list.length && list[index] is Map) {
+        if (list[index]['text'] != newText) {
+          list[index]['text'] = newText;
+          await prefs.setString('ocr_history_json', jsonEncode(list));
+        }
+      }
+    } catch (_) {}
+    await _loadLocalHistory();
+  }
+
+  // ------------------------------------------------------------------
+  // Gallery import: batch-OCR the user's EXISTING screenshots so they can
+  // finally harvest and delete their backlog. Silent processing: no beeps,
+  // no clipboard changes — just cards appearing in the inbox.
+  // ------------------------------------------------------------------
+
+  Future<void> _importFromGallery() async {
+    final ImagePicker picker = ImagePicker();
+    List<XFile> picks = [];
+    try {
+      picks = await picker.pickMultiImage();
+    } catch (_) {}
+    if (picks.isEmpty) return;
+
+    final ValueNotifier<int> processed = ValueNotifier<int>(0);
+    bool cancelled = false;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Importing Screenshots"),
+        content: ValueListenableBuilder<int>(
+          valueListenable: processed,
+          builder: (context, value, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(
+                value: picks.isEmpty ? 0 : value / picks.length,
+              ),
+              const SizedBox(height: 12),
+              Text("Processing $value of ${picks.length}..."),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              cancelled = true;
+            },
+            child: const Text("Stop"),
+          ),
+        ],
+      ),
+    );
+
+    int imported = 0;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    List<dynamic> list = [];
+    try {
+      list = jsonDecode(prefs.getString('ocr_history_json') ?? '[]');
+    } catch (_) {}
+
+    for (final XFile pick in picks) {
+      if (cancelled) break;
+      final String? raw = await _ocrService.runOcrOnImage(pick.path);
+      processed.value = processed.value + 1;
+      if (raw == null) continue;
+      final String clean = raw
+          .replaceAll('\n', ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (clean.isEmpty) continue;
+      list.insert(0, {
+        'text': clean,
+        'timestamp': DateTime.now().toIso8601String(),
+        'image_path': pick.path,
+      });
+      imported++;
+    }
+
+    if (list.length > 200) {
+      list = list.sublist(0, 200);
+    }
+    await prefs.setString('ocr_history_json', jsonEncode(list));
+
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+    await _loadLocalHistory();
+
+    if (mounted) {
+      final int skipped = picks.length - imported;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            skipped > 0
+                ? "📥 Imported $imported of ${picks.length} — $skipped skipped (no readable text found in those images)."
+                : "📥 Imported $imported of ${picks.length} screenshots into your inbox.",
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
   // ------------------------------------------------------------------
   // Inbox card deletion (unchanged behavior)
   // ------------------------------------------------------------------
@@ -562,6 +680,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         centerTitle: true,
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.add_photo_alternate),
+            tooltip: 'Import Screenshots',
+            onPressed: _importFromGallery,
+          ),
           IconButton(
             icon: const Icon(Icons.folder_special),
             tooltip: 'Saved Files',
@@ -681,12 +804,41 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 _triggerSecureDeleteFlow(index, savedImagePath),
                           ),
                           onTap: () {
+                            final TextEditingController editController =
+                                TextEditingController(text: textSnippet);
                             showDialog(
                               context: context,
-                              builder: (context) => AlertDialog(
+                              builder: (context) {
+                                // Size the edit box from the space actually
+                                // left over once the keyboard is up, so the
+                                // dialog never overflows (portrait or
+                                // landscape). Text scrolls inside the box.
+                                final double keyboard =
+                                    MediaQuery.of(context).viewInsets.bottom;
+                                final double usable =
+                                    MediaQuery.of(context).size.height -
+                                        keyboard;
+                                final double fieldHeight =
+                                    (usable * 0.35).clamp(96.0, 280.0);
+                                return AlertDialog(
+                                scrollable: true,
                                 title: const Text("Extracted Task Content"),
-                                content: SingleChildScrollView(
-                                  child: Text(textSnippet),
+                                content: SizedBox(
+                                  width: double.maxFinite,
+                                  height: fieldHeight,
+                                  child: TextField(
+                                    controller: editController,
+                                    maxLines: null,
+                                    expands: true,
+                                    textAlignVertical: TextAlignVertical.top,
+                                    keyboardType: TextInputType.multiline,
+                                    style: const TextStyle(fontSize: 14),
+                                    decoration: const InputDecoration(
+                                      border: OutlineInputBorder(),
+                                      helperText:
+                                          "Edit the text before copying or saving",
+                                    ),
+                                  ),
                                 ),
                                 actions: [
                                   TextButton(
@@ -696,23 +848,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   ElevatedButton.icon(
                                     icon: const Icon(Icons.picture_as_pdf),
                                     label: const Text("Save to File"),
-                                    onPressed: () {
+                                    onPressed: () async {
+                                      final String edited =
+                                          editController.text;
                                       Navigator.pop(context);
+                                      await _updateHistoryEntryText(
+                                        index,
+                                        edited,
+                                      );
                                       _exportToPdfFlow(
-                                        textSnippet,
+                                        edited,
                                         savedImagePath,
                                       );
                                     },
                                   ),
                                   ElevatedButton(
-                                    onPressed: () {
-                                      FlutterClipboard.copy(textSnippet);
+                                    onPressed: () async {
+                                      final String edited =
+                                          editController.text;
+                                      FlutterClipboard.copy(edited);
                                       Navigator.pop(context);
+                                      await _updateHistoryEntryText(
+                                        index,
+                                        edited,
+                                      );
                                     },
                                     child: const Text("Copy Text"),
                                   ),
                                 ],
-                              ),
+                              );
+                              },
                             );
                           },
                         ),

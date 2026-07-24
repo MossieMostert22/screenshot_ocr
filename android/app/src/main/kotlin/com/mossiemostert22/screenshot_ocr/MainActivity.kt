@@ -29,6 +29,10 @@ class MainActivity : FlutterActivity() {
     private var deleteResultCallback: MethodChannel.Result? = null
     private var refreshReceiver: BroadcastReceiver? = null
 
+    // Lazily-created recognizer for gallery imports (batch OCR of old
+    // screenshots). Separate from the background service's recognizer.
+    private var importRecognizer: com.google.mlkit.vision.text.TextRecognizer? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -78,6 +82,14 @@ class MainActivity : FlutterActivity() {
                         result.success(
                             saved?.let { mapOf("uri" to it.first, "name" to it.second) }
                         )
+                    }
+                }
+                "runOcrOnImage" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.success(null)
+                    } else {
+                        runOcrOnImage(path, result)
                     }
                 }
                 "renderPdfThumbnail" -> result.success(renderPdfThumbnail(call.argument<String>("uri")))
@@ -159,6 +171,25 @@ class MainActivity : FlutterActivity() {
             Pair(uri.toString(), finalName)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /** Runs ML Kit OCR on one image file for the gallery-import feature.
+     *  Uses tiled recognition so tall scroll captures keep full resolution. */
+    private fun runOcrOnImage(path: String, result: MethodChannel.Result) {
+        try {
+            if (importRecognizer == null) {
+                importRecognizer = com.google.mlkit.vision.text.TextRecognition.getClient(
+                    com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
+                )
+            }
+            val recognizer = importRecognizer!!
+            Thread {
+                val text = TiledTextOcr.recognize(applicationContext, recognizer, path)
+                runOnUiThread { result.success(text) }
+            }.start()
+        } catch (e: Exception) {
+            result.success(null)
         }
     }
 
@@ -300,6 +331,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         refreshReceiver?.let { unregisterReceiver(it) }
         refreshReceiver = null
+        importRecognizer?.close()
+        importRecognizer = null
         companionChannel = null
         super.onDestroy()
     }

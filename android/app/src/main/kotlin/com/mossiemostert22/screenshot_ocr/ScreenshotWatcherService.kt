@@ -67,7 +67,9 @@ class ScreenshotWatcherService : Service() {
         const val KEY_SOUND = "flutter.ocr_sound_enabled"
         const val KEY_AUTOCOPY = "flutter.ocr_auto_copy"
 
-        const val MAX_HISTORY = 50
+        // Raised from 50 so gallery imports (potentially 100+ screenshots)
+        // aren't trimmed away by the next live capture.
+        const val MAX_HISTORY = 200
     }
 
     private var screenshotObserver: ContentObserver? = null
@@ -267,20 +269,24 @@ class ScreenshotWatcherService : Service() {
 
     private fun runOcrOnScreenshot(path: String) {
         val engine = recognizer ?: return
-        try {
-            val inputImage = InputImage.fromFilePath(this, Uri.fromFile(File(path)))
-            engine.process(inputImage)
-                .addOnSuccessListener { visionText ->
-                    val cleanText = visionText.text
-                        .replace("\n", " ")
-                        .replace(Regex("\\s+"), " ")
-                        .trim()
-                    if (cleanText.isNotEmpty()) {
+        // TiledTextOcr blocks on ML Kit, so run it off the main thread. Tall
+        // scroll captures are recognized in full-resolution segments — feeding
+        // them whole makes ML Kit downscale the text into garbage.
+        Thread {
+            try {
+                val rawText = TiledTextOcr.recognize(applicationContext, engine, path)
+                val cleanText = rawText
+                    ?.replace("\n", " ")
+                    ?.replace(Regex("\\s+"), " ")
+                    ?.trim()
+                    ?: return@Thread
+                if (cleanText.isNotEmpty()) {
+                    Handler(Looper.getMainLooper()).post {
                         handleOcrResult(cleanText, path)
                     }
                 }
-                .addOnFailureListener { /* silent: nothing useful to show the user */ }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }.start()
     }
 
     // ------------------------------------------------------------------
