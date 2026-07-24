@@ -804,14 +804,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 TextEditingController(text: textSnippet);
                             showDialog(
                               context: context,
-                              builder: (context) => AlertDialog(
+                              builder: (context) {
+                                // Size the edit box from the space actually
+                                // left over once the keyboard is up, so the
+                                // dialog never overflows (portrait or
+                                // landscape). Text scrolls inside the box.
+                                final double keyboard =
+                                    MediaQuery.of(context).viewInsets.bottom;
+                                final double usable =
+                                    MediaQuery.of(context).size.height -
+                                        keyboard;
+                                final double fieldHeight =
+                                    (usable * 0.35).clamp(96.0, 280.0);
+                                return AlertDialog(
+                                scrollable: true,
                                 title: const Text("Extracted Task Content"),
                                 content: SizedBox(
                                   width: double.maxFinite,
+                                  height: fieldHeight,
                                   child: TextField(
                                     controller: editController,
-                                    minLines: 4,
-                                    maxLines: 12,
+                                    maxLines: null,
+                                    expands: true,
+                                    textAlignVertical: TextAlignVertical.top,
                                     keyboardType: TextInputType.multiline,
                                     style: const TextStyle(fontSize: 14),
                                     decoration: const InputDecoration(
@@ -857,7 +872,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     child: const Text("Copy Text"),
                                   ),
                                 ],
-                              ),
+                              );
+                              },
                             );
                           },
                         ),
