@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/ocr_service.dart';
@@ -128,6 +129,12 @@ class _SavedFilesPageState extends State<SavedFilesPage> {
       if (uri.isNotEmpty) {
         fileDeleted = await _ocrService.deleteSavedPdf(uri);
       }
+      final String thumb = entry['thumb'] ?? '';
+      if (thumb.isNotEmpty) {
+        try {
+          await File(thumb).delete();
+        } catch (_) {}
+      }
       await _removeRecordAt(index);
 
       if (mounted) {
@@ -189,22 +196,46 @@ class _SavedFilesPageState extends State<SavedFilesPage> {
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                top: 16,
+                bottom: MediaQuery.of(context).padding.bottom + 16,
+              ),
               itemCount: _savedFiles.length,
               itemBuilder: (context, index) {
                 final entry = _savedFiles[index];
                 final String name = entry['name'] ?? 'Unnamed';
                 final String snippet = entry['snippet'] ?? '';
                 final String created = _formatDate(entry['created']);
+                final String thumb = entry['thumb'] ?? '';
+                final bool hasThumb =
+                    thumb.isNotEmpty && File(thumb).existsSync();
 
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 6),
                   child: ListTile(
-                    leading: const Icon(
-                      Icons.picture_as_pdf,
-                      color: Colors.redAccent,
-                      size: 36,
-                    ),
+                    leading: hasThumb
+                        ? ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: Image.file(
+                              File(thumb),
+                              width: 48,
+                              height: 64,
+                              fit: BoxFit.cover,
+                              alignment: Alignment.topCenter,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.picture_as_pdf,
+                                color: Colors.redAccent,
+                                size: 36,
+                              ),
+                            ),
+                          )
+                        : const Icon(
+                            Icons.picture_as_pdf,
+                            color: Colors.redAccent,
+                            size: 36,
+                          ),
                     title: Text(
                       '$name.pdf',
                       style: const TextStyle(fontWeight: FontWeight.bold),

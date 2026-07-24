@@ -44,12 +44,33 @@ class OcrService {
   // ------------------------------------------------------------------
 
   /// Saves PDF bytes into public Documents/Screenshot OCR via MediaStore.
-  /// Returns the content URI string on success, null on failure.
-  Future<String?> savePdfToDocuments(Uint8List bytes, String fileName) async {
+  /// Returns {'uri': contentUri, 'name': actualDisplayName} — the name can
+  /// differ from the requested one if MediaStore auto-renamed a duplicate.
+  Future<Map<String, String>?> savePdfToDocuments(
+    Uint8List bytes,
+    String fileName,
+  ) async {
     try {
-      return await _channel.invokeMethod<String>(
+      final Map? res = await _channel.invokeMethod<Map>(
         'savePdfToDocuments',
         {'bytes': bytes, 'fileName': fileName},
+      );
+      if (res == null) return null;
+      final String? uri = res['uri'] as String?;
+      final String? name = res['name'] as String?;
+      if (uri == null || name == null) return null;
+      return {'uri': uri, 'name': name};
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Renders the first page of a saved PDF as a small PNG thumbnail.
+  Future<Uint8List?> renderPdfThumbnail(String uri) async {
+    try {
+      return await _channel.invokeMethod<Uint8List>(
+        'renderPdfThumbnail',
+        {'uri': uri},
       );
     } catch (_) {
       return null;

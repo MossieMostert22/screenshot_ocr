@@ -74,9 +74,13 @@ class MainActivity : FlutterActivity() {
                     if (bytes == null || fileName.isNullOrBlank()) {
                         result.success(null)
                     } else {
-                        result.success(savePdfToDocuments(bytes, fileName))
+                        val saved = savePdfToDocuments(bytes, fileName)
+                        result.success(
+                            saved?.let { mapOf("uri" to it.first, "name" to it.second) }
+                        )
                     }
                 }
+                "renderPdfThumbnail" -> result.success(renderPdfThumbnail(call.argument<String>("uri")))
                 "openSavedPdf" -> result.success(openSavedPdf(call.argument<String>("uri")))
                 "shareSavedPdf" -> result.success(shareSavedPdf(call.argument<String>("uri")))
                 "deleteSavedPdf" -> result.success(deleteSavedPdf(call.argument<String>("uri")))
@@ -108,10 +112,10 @@ class MainActivity : FlutterActivity() {
     /**
      * Writes the PDF into the public Documents/Screenshot OCR folder through
      * MediaStore. On Android 10+ this needs NO storage permission at all —
-     * apps may always create their own documents. Returns the content URI
-     * string on success (used later to open/share/delete the file).
+     * apps may always create their own documents. Returns (contentUri,
+     * actualDisplayName) — MediaStore may auto-rename duplicates.
      */
-    private fun savePdfToDocuments(bytes: ByteArray, rawName: String): String? {
+    private fun savePdfToDocuments(bytes: ByteArray, rawName: String): Pair<String, String>? {
         return try {
             val name = if (rawName.endsWith(".pdf", ignoreCase = true)) rawName else "$rawName.pdf"
             val resolver = applicationContext.contentResolver
@@ -142,7 +146,57 @@ class MainActivity : FlutterActivity() {
                 val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 resolver.update(uri, done, null, null)
             }
-            uri.toString()
+
+            // Read back the real display name (MediaStore may have added " (1)").
+            var finalName = name
+            resolver.query(
+                uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null
+            )?.use {
+                if (it.moveToFirst()) {
+                    finalName = it.getString(0) ?: name
+                }
+            }
+            Pair(uri.toString(), finalName)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Renders page 1 of a saved PDF into a small PNG for the Saved Files list. */
+    private fun renderPdfThumbnail(uriStr: String?): ByteArray? {
+        if (uriStr.isNullOrBlank()) return null
+        return try {
+            val pfd = applicationContext.contentResolver
+                .openFileDescriptor(Uri.parse(uriStr), "r") ?: return null
+            pfd.use { descriptor ->
+                android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
+                    if (renderer.pageCount < 1) return null
+                    renderer.openPage(0).use { page ->
+                        val scale = 200f / page.width
+                        val bmpW = 200
+                        // Tall continuous pages: show just the top portion.
+                        val bmpH = (page.height * scale).toInt()
+                            .coerceAtMost(280).coerceAtLeast(1)
+                        val bitmap = android.graphics.Bitmap.createBitmap(
+                            bmpW, bmpH, android.graphics.Bitmap.Config.ARGB_8888
+                        )
+                        bitmap.eraseColor(android.graphics.Color.WHITE)
+                        val matrix = android.graphics.Matrix().apply {
+                            postScale(scale, scale)
+                        }
+                        page.render(
+                            bitmap, null, matrix,
+                            android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                        )
+                        val stream = java.io.ByteArrayOutputStream()
+                        bitmap.compress(
+                            android.graphics.Bitmap.CompressFormat.PNG, 90, stream
+                        )
+                        bitmap.recycle()
+                        stream.toByteArray()
+                    }
+                }
+            }
         } catch (e: Exception) {
             null
         }

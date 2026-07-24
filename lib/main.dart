@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:clipboard/clipboard.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'services/ocr_service.dart';
@@ -42,14 +42,6 @@ class ScreenshotOcrApp extends StatelessWidget {
       home: const HomePage(),
     );
   }
-}
-
-/// One page-sized horizontal strip of a screenshot, with the exact height
-/// (in PDF points) it must occupy on the page.
-class _PdfImageSlice {
-  final Uint8List bytes;
-  final double displayHeight;
-  _PdfImageSlice(this.bytes, this.displayHeight);
 }
 
 class HomePage extends StatefulWidget {
@@ -234,6 +226,46 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         chosenName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '').trim();
     if (safeName.isEmpty) return;
 
+    // ---- Duplicate name check: warn before creating "name (1).pdf" copies ----
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    List<dynamic> records = [];
+    try {
+      records = jsonDecode(prefs.getString('saved_files_json') ?? '[]');
+    } catch (_) {}
+    final int existingIndex =
+        records.indexWhere((e) => e is Map && e['name'] == safeName);
+
+    bool overwrite = false;
+    if (existingIndex != -1 && mounted) {
+      final String? action = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text("File already exists"),
+          content: Text(
+            "\"$safeName.pdf\" is already in your Saved Files. What would you like to do?",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'keep'),
+              child: const Text("Keep Both"),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, 'overwrite'),
+              child: const Text("Overwrite"),
+            ),
+          ],
+        ),
+      );
+      if (action == null || action == 'cancel') return;
+      overwrite = action == 'overwrite';
+    }
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -245,25 +277,65 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     try {
+      if (overwrite && existingIndex != -1) {
+        final Map old = records[existingIndex];
+        final String oldUri = old['uri'] ?? '';
+        if (oldUri.isNotEmpty) {
+          await _ocrService.deleteSavedPdf(oldUri);
+        }
+        final String oldThumb = old['thumb'] ?? '';
+        if (oldThumb.isNotEmpty) {
+          try {
+            await File(oldThumb).delete();
+          } catch (_) {}
+        }
+        records.removeAt(existingIndex);
+        await prefs.setString('saved_files_json', jsonEncode(records));
+      }
+
       final Uint8List pdfBytes = await _buildPdfBytes(
         textContent,
         includeImage ? imagePath : null,
+        safeName,
       );
 
-      final String? savedUri =
+      final Map<String, String>? saved =
           await _ocrService.savePdfToDocuments(pdfBytes, safeName);
 
-      if (savedUri == null) {
+      if (saved == null) {
         throw Exception("The file could not be written.");
       }
 
-      await _recordSavedFile(safeName, savedUri, textContent);
+      // MediaStore may have auto-renamed (e.g. "name (1).pdf") — record reality.
+      final String actualName = saved['name']!
+          .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
+
+      // Render a first-page thumbnail for the Saved Files list.
+      String thumbPath = '';
+      final Uint8List? thumbBytes =
+          await _ocrService.renderPdfThumbnail(saved['uri']!);
+      if (thumbBytes != null) {
+        try {
+          final Directory docs = await getApplicationDocumentsDirectory();
+          final Directory thumbsDir = Directory('${docs.path}/thumbs');
+          if (!await thumbsDir.exists()) {
+            await thumbsDir.create(recursive: true);
+          }
+          final File thumbFile = File(
+            '${thumbsDir.path}/${DateTime.now().millisecondsSinceEpoch}.png',
+          );
+          await thumbFile.writeAsBytes(thumbBytes);
+          thumbPath = thumbFile.path;
+        } catch (_) {}
+      }
+
+      await _recordSavedFile(actualName, saved['uri']!, textContent, thumbPath);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "📁 Saved to Documents/Screenshot OCR/$safeName.pdf — find it in Saved Files!",
+              "📁 Saved to Documents/Screenshot OCR/$actualName.pdf — find it in Saved Files!",
             ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: Colors.green,
@@ -282,138 +354,102 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<Uint8List> _buildPdfBytes(String text, String? imagePath) async {
-    final pdf = pw.Document();
-    final List<pw.Widget> content = [
-      pw.Text(
-        "Extracted Task Document",
-        style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold),
-      ),
-      pw.SizedBox(height: 8),
-      pw.Text(
-        "Saved via Instant Screenshot OCR",
-        style: pw.TextStyle(fontSize: 10, color: PdfColor.fromHex('#757575')),
-      ),
-      pw.Divider(),
-      pw.SizedBox(height: 12),
-    ];
+  Future<Uint8List> _buildPdfBytes(
+    String text,
+    String? imagePath,
+    String title,
+  ) async {
+    // The user's chosen filename IS the document title — it shows in the
+    // PDF header, in WhatsApp previews, and in viewer metadata.
+    final pdf = pw.Document(title: '$title.pdf');
+
+    List<pw.Widget> buildHeader() => [
+          pw.Text(
+            title,
+            style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            "Saved via Instant Screenshot OCR",
+            style:
+                pw.TextStyle(fontSize: 9, color: PdfColor.fromHex('#757575')),
+          ),
+          pw.Divider(),
+          pw.SizedBox(height: 8),
+        ];
 
     if (imagePath != null) {
-      final List<_PdfImageSlice> slices = await _sliceImageForPdf(imagePath);
-      for (final slice in slices) {
-        content.add(
-          pw.Padding(
-            padding: const pw.EdgeInsets.only(bottom: 6),
-            // Explicit dimensions: the pdf library lays images out at natural
-            // pixel size otherwise, overflowing the page.
-            child: pw.SizedBox(
-              width: 531.0,
-              height: slice.displayHeight,
-              child: pw.Image(pw.MemoryImage(slice.bytes), fit: pw.BoxFit.fill),
+      // ONE CONTINUOUS PAGE: the page height is custom-sized to the image,
+      // so screenshots (even long scroll captures) are never chopped at
+      // page boundaries. No text section — the image IS the document.
+      final Uint8List imgBytes = await File(imagePath).readAsBytes();
+      final ui.Codec codec = await ui.instantiateImageCodec(imgBytes);
+      final ui.FrameInfo frame = await codec.getNextFrame();
+      final int imgW = frame.image.width;
+      final int imgH = frame.image.height;
+      frame.image.dispose();
+
+      const double pageWidth = 595.28; // A4 width for familiar proportions
+      const double margin = 32.0;
+      const double headerHeight = 80.0;
+      const double maxPageHeight = 14000.0; // PDF format ceiling ~14400pt
+
+      double displayW = pageWidth - margin * 2;
+      double displayH = imgH * (displayW / imgW);
+      final double maxImageHeight = maxPageHeight - headerHeight - margin * 2;
+      if (displayH > maxImageHeight) {
+        final double shrink = maxImageHeight / displayH;
+        displayH *= shrink;
+        displayW *= shrink;
+      }
+      final double pageHeight = margin * 2 + headerHeight + displayH;
+
+      final pw.MemoryImage pdfImage = pw.MemoryImage(imgBytes);
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat(pageWidth, pageHeight),
+          margin: const pw.EdgeInsets.all(margin),
+          build: (pw.Context context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                ...buildHeader(),
+                pw.SizedBox(
+                  width: displayW,
+                  height: displayH,
+                  child: pw.Image(pdfImage, fit: pw.BoxFit.fill),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } else {
+      // Text-only: normal A4 flow.
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(32),
+          maxPages: 100,
+          build: (pw.Context context) => [
+            ...buildHeader(),
+            pw.Paragraph(
+              text: text,
+              style: pw.TextStyle(fontSize: 12, lineSpacing: 1.4),
             ),
-          ),
-        );
-      }
-      if (slices.isNotEmpty) {
-        content.add(pw.SizedBox(height: 12));
-        content.add(pw.Divider());
-        content.add(pw.SizedBox(height: 12));
-        content.add(
-          pw.Text(
-            "Extracted Text",
-            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-          ),
-        );
-        content.add(pw.SizedBox(height: 8));
-      }
+          ],
+        ),
+      );
     }
-
-    content.add(
-      pw.Paragraph(
-        text: text,
-        style: pw.TextStyle(fontSize: 12, lineSpacing: 1.4),
-      ),
-    );
-
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(32),
-        maxPages: 100,
-        build: (pw.Context context) => content,
-      ),
-    );
 
     return pdf.save();
-  }
-
-  /// Cuts a (possibly very tall scroll-capture) screenshot into page-sized
-  /// horizontal slices so the PDF shows the WHOLE image across multiple
-  /// pages instead of one unreadably shrunken thumbnail.
-  Future<List<_PdfImageSlice>> _sliceImageForPdf(String path) async {
-    try {
-      final Uint8List bytes = await File(path).readAsBytes();
-      final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-      final ui.FrameInfo frame = await codec.getNextFrame();
-      final ui.Image fullImage = frame.image;
-
-      // A4 content area at 32pt margins: ~531pt wide. Keep each slice's
-      // rendered height under ~690pt so every slice fits one page.
-      const double contentWidthPts = 531.0;
-      const double sliceHeightPts = 690.0;
-      final double scale = contentWidthPts / fullImage.width;
-      final int sliceHeightPx = math.max(1, (sliceHeightPts / scale).floor());
-
-      final List<_PdfImageSlice> slices = [];
-      int y = 0;
-      while (y < fullImage.height) {
-        final int h = math.min(sliceHeightPx, fullImage.height - y);
-
-        final ui.PictureRecorder recorder = ui.PictureRecorder();
-        final Canvas canvas = Canvas(recorder);
-        canvas.drawImageRect(
-          fullImage,
-          Rect.fromLTWH(
-            0,
-            y.toDouble(),
-            fullImage.width.toDouble(),
-            h.toDouble(),
-          ),
-          Rect.fromLTWH(
-            0,
-            0,
-            fullImage.width.toDouble(),
-            h.toDouble(),
-          ),
-          Paint(),
-        );
-        final ui.Picture picture = recorder.endRecording();
-        final ui.Image sliceImage = await picture.toImage(fullImage.width, h);
-        final ByteData? byteData =
-            await sliceImage.toByteData(format: ui.ImageByteFormat.png);
-        if (byteData != null) {
-          final double displayHeight =
-              math.min(h * scale, sliceHeightPts);
-          slices.add(
-            _PdfImageSlice(byteData.buffer.asUint8List(), displayHeight),
-          );
-        }
-        sliceImage.dispose();
-        picture.dispose();
-        y += h;
-      }
-      fullImage.dispose();
-      return slices;
-    } catch (_) {
-      // Image unreadable (deleted, moved, permission) → text-only PDF.
-      return [];
-    }
   }
 
   Future<void> _recordSavedFile(
     String name,
     String uri,
     String sourceText,
+    String thumbPath,
   ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
@@ -433,6 +469,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       'uri': uri,
       'created': DateTime.now().toIso8601String(),
       'snippet': snippet,
+      'thumb': thumbPath,
     });
 
     await prefs.setString('saved_files_json', jsonEncode(list));
@@ -613,7 +650,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    // Bottom padding keeps the last card clear of the
+                    // system navigation bar.
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      right: 16,
+                      bottom: MediaQuery.of(context).padding.bottom + 16,
+                    ),
                     itemCount: _ocrHistoryList.length,
                     itemBuilder: (context, index) {
                       final item = _ocrHistoryList[index];
