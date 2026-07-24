@@ -577,13 +577,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _loadLocalHistory();
 
     if (mounted) {
+      final int skipped = picks.length - imported;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "📥 Imported $imported of ${picks.length} screenshots into your inbox.",
+            skipped > 0
+                ? "📥 Imported $imported of ${picks.length} — $skipped skipped (no readable text found in those images)."
+                : "📥 Imported $imported of ${picks.length} screenshots into your inbox.",
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
         ),
       );
     }
